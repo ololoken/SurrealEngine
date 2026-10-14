@@ -486,7 +486,12 @@ void GLRenderDevice::CreateSceneSamplers()
 		GLuint sampler = ScenePass.Samplers[i]->Handle;
 
 		int dummyMipmapCount = (i >> 2) & 3;
+#ifdef __EMSCRIPTEN__
+		// WebGL 2 has no mirror-clamp-to-edge, anisotropy, or sampler LOD bias.
+		GLint addressmode = (i & 2) ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+#else
 		GLint addressmode = (i & 2) ? GL_MIRROR_CLAMP_TO_EDGE : GL_REPEAT;
+#endif
 
 #if 0
 		glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, (i & 1) ? GL_NEAREST : GL_LINEAR);
@@ -494,14 +499,18 @@ void GLRenderDevice::CreateSceneSamplers()
 #else
 		glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, (i & 1) ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR);
 		glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, (i & 1) ? GL_NEAREST : GL_LINEAR);
+#ifndef __EMSCRIPTEN__
 		if (i & 1)
 			glSamplerParameterf(sampler, GL_TEXTURE_MAX_ANISOTROPY_EXT, 8.0f); // To do: we should check for this extension
+#endif
 #endif
 		glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, addressmode);
 		glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, addressmode);
 		glSamplerParameteri(sampler, GL_TEXTURE_WRAP_R, addressmode);
 		glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, (float)dummyMipmapCount);
+#ifndef __EMSCRIPTEN__
 		glSamplerParameterf(sampler, GL_TEXTURE_LOD_BIAS, (float)dummyMipmapCount + LODBias);
+#endif
 
 		ThrowIfGLError("Could not create sampler");
 	}
@@ -892,6 +901,18 @@ void GLRenderDevice::Flush(bool AllowPrecache)
 		PrecacheOnFlip = 1;
 }
 
+#ifdef __EMSCRIPTEN__
+namespace
+{
+	// glMapBufferRange is not a dependable WebGL entry point: the dynamic loader
+	// only keeps GL functions something calls directly, and Emscripten's mapping
+	// path rejects GL_MAP_UNSYNCHRONIZED_BIT. Keep the staging copies here and
+	// upload them with glBufferSubData.
+	std::vector<GLSceneVertex> WebGLVertices;
+	std::vector<uint32_t> WebGLIndexes;
+}
+#endif
+
 void GLRenderDevice::MapVertices(bool nextBuffer)
 {
 	if (nextBuffer)
@@ -901,6 +922,19 @@ void GLRenderDevice::MapVertices(bool nextBuffer)
 		Stats.BuffersUsed++;
 	}
 
+#ifdef __EMSCRIPTEN__
+	if (!SceneVertices)
+	{
+		WebGLVertices.resize(SceneVertexBufferSize);
+		SceneVertices = WebGLVertices.data();
+	}
+
+	if (!SceneIndexes)
+	{
+		WebGLIndexes.resize(SceneIndexBufferSize);
+		SceneIndexes = WebGLIndexes.data();
+	}
+#else
 	if (!SceneVertices)
 	{
 		glBindBuffer(GL_ARRAY_BUFFER, ScenePass.VertexBuffer->Handle);
@@ -922,10 +956,30 @@ void GLRenderDevice::MapVertices(bool nextBuffer)
 		if (!SceneIndexes)
 			throw std::runtime_error("Could not map ScenePass.SceneIndexes");
 	}
+#endif
 }
 
 void GLRenderDevice::UnmapVertices()
 {
+#ifdef __EMSCRIPTEN__
+	if (SceneVertices)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, ScenePass.VertexBuffer->Handle);
+		if (GLSceneVertexPos)
+			glBufferSubData(GL_ARRAY_BUFFER, 0, GLSceneVertexPos * sizeof(GLSceneVertex), WebGLVertices.data());
+		SceneVertices = nullptr;
+		ThrowIfGLError("Could not upload ScenePass.VertexBuffer");
+	}
+
+	if (SceneIndexes)
+	{
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ScenePass.IndexBuffer->Handle);
+		if (SceneIndexPos)
+			glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, SceneIndexPos * sizeof(uint32_t), WebGLIndexes.data());
+		SceneIndexes = nullptr;
+		ThrowIfGLError("Could not upload ScenePass.IndexBuffer");
+	}
+#else
 	if (SceneVertices)
 	{
 		glBindBuffer(GL_ARRAY_BUFFER, ScenePass.VertexBuffer->Handle);
@@ -941,6 +995,7 @@ void GLRenderDevice::UnmapVertices()
 		ThrowIfGLError("Could not unmap ScenePass.IndexBuffer");
 		SceneIndexes = nullptr;
 	}
+#endif
 }
 
 void GLRenderDevice::Lock(vec4 InFlashScale, vec4 InFlashFog, vec4 ScreenClear, uint8_t* InHitData, int* InHitSize)
@@ -2181,6 +2236,61 @@ std::shared_ptr<GLBuffer> GLRenderDevice::CreateBuffer(GLenum target, GLenum usa
 	return buffer;
 }
 
+#ifdef __EMSCRIPTEN__
+// GLSL ES 3.00 has no layout(binding). Linked uniform blocks already use binding 0,
+// which is where SetUniformBuffers attaches them. Sampler uniforms are pointed at
+// the texture units SetTextures uses. Only active samplers are queried: WebGL
+// raises INVALID_OPERATION for glGetUniformLocation / glGetUniformBlockIndex names
+// that are not in this program.
+static void BindWebGLShaderResources(GLuint program)
+{
+	while (glGetError() != GL_NO_ERROR)
+		;
+
+	glUseProgram(program);
+
+	GLint uniformCount = 0;
+	glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &uniformCount);
+	for (GLint i = 0; i < uniformCount; i++)
+	{
+		char name[128] = {};
+		GLsizei length = 0;
+		GLint size = 0;
+		GLenum type = 0;
+		glGetActiveUniform(program, static_cast<GLuint>(i), static_cast<GLsizei>(sizeof(name)), &length, &size, &type, name);
+		if (type != GL_SAMPLER_2D || length <= 0)
+			continue;
+
+		std::string uniformName(name, name + length);
+		size_t bracket = uniformName.find('[');
+		if (bracket != std::string::npos)
+			uniformName.resize(bracket);
+
+		GLint unit = -1;
+		if (uniformName == "tex" || uniformName == "texSampler")
+			unit = 0;
+		else if (uniformName == "lightmap" || uniformName == "texDither")
+			unit = 1;
+		else if (uniformName == "macro")
+			unit = 2;
+		else if (uniformName == "detail")
+			unit = 3;
+		if (unit < 0)
+			continue;
+
+		GLint location = glGetUniformLocation(program, name);
+		if (location >= 0)
+			glUniform1i(location, unit);
+	}
+
+	glUseProgram(0);
+
+	GLenum error = glGetError();
+	if (error != GL_NO_ERROR)
+		throw std::runtime_error("BindWebGLShaderResources failed (" + std::to_string(error) + ")");
+}
+#endif
+
 std::shared_ptr<GLProgram> GLRenderDevice::CreateProgram(const std::string& programName, std::shared_ptr<GLVertexShader> vertexShader, std::shared_ptr<GLFragmentShader> fragmentShader)
 {
 	auto program = std::make_shared<GLProgram>();
@@ -2200,6 +2310,9 @@ std::shared_ptr<GLProgram> GLRenderDevice::CreateProgram(const std::string& prog
 		log.resize(length);
 		throw std::runtime_error("Could not link program'" + programName + "':" + log);
 	}
+#ifdef __EMSCRIPTEN__
+	BindWebGLShaderResources(program->Handle);
+#endif
 	return program;
 }
 
@@ -2221,7 +2334,11 @@ std::shared_ptr<GLFragmentShader> GLRenderDevice::CreateFragmentShader(const std
 
 void GLRenderDevice::CompileGlsl(GLShader* shader, const std::string& filename, const std::vector<std::string> defines)
 {
+#ifdef __EMSCRIPTEN__
+	std::string code = "#version 300 es\r\n";
+#else
 	std::string code = "#version 420\r\n";
+#endif
 	for (const std::string& define : defines)
 	{
 		code += "#define ";

@@ -4,8 +4,10 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#ifndef __EMSCRIPTEN__
 #include <gio/gio.h>
 #include <fontconfig/fontconfig.h>
+#endif
 
 static std::vector<uint8_t> ReadAllBytes(const std::string& filename)
 {
@@ -22,6 +24,8 @@ static std::vector<uint8_t> ReadAllBytes(const std::string& filename)
 
 	return buffer;
 }
+
+#ifndef __EMSCRIPTEN__
 
 static std::vector<SingleFontData> GetGtkUIFont(const std::string& propertyName)
 {
@@ -74,6 +78,20 @@ std::vector<SingleFontData> ResourceData::LoadMonospaceSystemFont()
 {
 	return GetGtkUIFont("monospace-font-name");
 }
+
+#else
+
+std::vector<SingleFontData> ResourceData::LoadSystemFont()
+{
+	throw std::runtime_error("System font lookup is not available in the Emscripten build; install a ResourceLoader");
+}
+
+std::vector<SingleFontData> ResourceData::LoadMonospaceSystemFont()
+{
+	throw std::runtime_error("System font lookup is not available in the Emscripten build; install a ResourceLoader");
+}
+
+#endif
 
 double ResourceData::GetSystemFontSize()
 {

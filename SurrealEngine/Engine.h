@@ -71,6 +71,8 @@ public:
 	~Engine();
 
 	void Run();
+	bool TickGame();
+	void Shutdown();
 	void ClientTravel(const std::string& URL, ETravelType travelType, bool transferItems);
 	UnrealURL GetDefaultURL(const std::string& map);
 	void LoadEntryMap();

@@ -10,6 +10,7 @@
 #include <surrealwidgets/widgets/scrollbar/scrollbar.h>
 #include <surrealwidgets/systemdialogs/save_file_dialog.h>
 #include <miniz.h>
+#include <iostream>
 
 bool ErrorWindow::CheckCrashReporter()
 {
@@ -64,6 +65,7 @@ void ErrorWindow::ExecModal(const std::string& text, const std::list<LogMessageL
 
 	auto window = std::make_unique<ErrorWindow>(std::move(minidump));
 	window->SetText(text, log);
+	std::cerr << window->clipboardtext << std::flush;
 	window->SetFrameGeometry((screenSize.width - windowWidth) * 0.5, (screenSize.height - windowHeight) * 0.5, windowWidth, windowHeight);
 	window->Show();
 

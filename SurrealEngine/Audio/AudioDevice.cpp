@@ -24,6 +24,9 @@ class ALSoundSource
 public:
 	ALSoundSource()
 	{
+#ifdef __EMSCRIPTEN__
+		alGetError();
+#endif
 		alGenSources(1, &id);
 		if (alGetError() != AL_NO_ERROR)
 			Exception::Throw("Failed to generate AL source");
@@ -227,7 +230,10 @@ public:
 		alListener3f(AL_POSITION, 0, 0, 0.0f);
 		alListener3f(AL_VELOCITY, 0, 0, 0);
 		alListenerfv(AL_ORIENTATION, listenerOri);
+#ifndef __EMSCRIPTEN__
+		// Emscripten OpenAL does not implement this extension and records AL_INVALID_ENUM.
 		alListenerf(AL_METERS_PER_UNIT, 1.f / UU_PER_METER);
+#endif
 
 		alDistanceModel(AL_LINEAR_DISTANCE_CLAMPED);
 		alSpeedOfSound(343.3f / (1.0f / UU_PER_METER));
@@ -237,7 +243,14 @@ public:
 		alcGetIntegerv(alDevice, ALC_STEREO_SOURCES, 1, &stereoSources);
 
 		// TODO: how do we prioritize mono vs stereo source count?
-		sources.resize(monoSources);
+		int sourceCount = monoSources;
+#ifdef __EMSCRIPTEN__
+		// Emscripten OpenAL returns 0x7FFFFFFF for ALC_MONO_SOURCES ("unlimited").
+		// Allocating that many ALSoundSource objects throws std::bad_alloc.
+		if (sourceCount > numVoices)
+			sourceCount = numVoices;
+#endif
+		sources.resize(sourceCount);
 
 		// init music source/buffer
 		alGenSources(1, &alMusicSource);
@@ -246,8 +259,10 @@ public:
 		alMusicBuffers.resize(musicBufferCount);
 		alGenBuffers(musicBufferCount, &alMusicBuffers[0]);
 
+#ifndef __EMSCRIPTEN__
 		// init playback thread
 		musicThreadData.thread = std::thread([this]() { MusicThreadMain(); });
+#endif
 	}
 
 	~OpenALAudioDevice()
@@ -255,7 +270,9 @@ public:
 		std::unique_lock lock(musicThreadData.mutex);
 		musicThreadData.exitFlag = true;
 		lock.unlock();
+#ifndef __EMSCRIPTEN__
 		musicThreadData.thread.join();
+#endif
 
 		alSourceStop(alMusicSource);
 		alDeleteSources(1, &alMusicSource);
@@ -476,61 +493,66 @@ public:
 			alListener3f(AL_VELOCITY, velocity.x, velocity.y, -velocity.z);
 			alListenerfv(AL_ORIENTATION, listenerOri);
 		}
+
+#ifdef __EMSCRIPTEN__
+		PumpMusic();
+#endif
+	}
+
+	// One music-mixing step. Returns false when the device is shutting down.
+	bool PumpMusic()
+	{
+		// Lock the mutex. Grab the data we need from the main thread. Then unlock.
+		std::unique_lock lock(musicThreadData.mutex);
+		if (musicThreadData.exitFlag)
+			return false;
+		if (musicThreadData.musicUpdate)
+		{
+			if (musicPlaying)
+			{
+				alSourceStop(alMusicSource);
+				alSourceUnqueueBuffers(alMusicSource, (ALsizei)alMusicBuffers.size(), &alMusicBuffers[0]);
+				musicPlaying = false;
+			}
+			currentMusic = std::move(musicThreadData.music);
+			musicThreadData.musicUpdate = false;
+		}
+		lock.unlock();
+		// Never touch anything from musicThreadData after this point.
+
+		if (currentMusic)
+		{
+			while (musicQueue.Size() < musicBufferCount)
+			{
+				// render a chunk of music
+				currentMusic->ReadSamples(musicQueue.GetNextFree(), musicBufferSize);
+				musicQueue.Push(musicQueue.GetNextFree());
+			}
+
+			if (!musicPlaying)
+			{
+				PlayMusicBuffer(currentMusic.get());
+				musicPlaying = true;
+			}
+			else if (musicQueue.Size() > 0)
+			{
+				UpdateMusicBuffer(currentMusic.get());
+			}
+
+			// TODO: music fade in/out
+		}
+		else
+		{
+			musicPlaying = false;
+		}
+		return true;
 	}
 
 	void MusicThreadMain()
 	{
-		std::unique_ptr<AudioSource> currentMusic;
-		bool musicPlaying = false;
-
-		while (true)
-		{
-			// Lock the mutex. Grab the data we need from the main thread. Then unlock.
-			std::unique_lock lock(musicThreadData.mutex);
-			if (musicThreadData.exitFlag)
-				break;
-			if (musicThreadData.musicUpdate)
-			{
-				if (musicPlaying)
-				{
-					alSourceStop(alMusicSource);
-					alSourceUnqueueBuffers(alMusicSource, (ALsizei)alMusicBuffers.size(), &alMusicBuffers[0]);
-					musicPlaying = false;
-				}
-				currentMusic = std::move(musicThreadData.music);
-				musicThreadData.musicUpdate = false;
-			}
-			lock.unlock();
-			// Never touch anything from musicThreadData after this point.
-
-			if (currentMusic)
-			{
-				while (musicQueue.Size() < musicBufferCount)
-				{
-					// render a chunk of music
-					currentMusic->ReadSamples(musicQueue.GetNextFree(), musicBufferSize);
-					musicQueue.Push(musicQueue.GetNextFree());
-				}
-
-				if (!musicPlaying)
-				{
-					PlayMusicBuffer(currentMusic.get());
-					musicPlaying = true;
-				}
-				else if (musicQueue.Size() > 0)
-				{
-					UpdateMusicBuffer(currentMusic.get());
-				}
-
-				// TODO: music fade in/out
-			}
-			else
-			{
-				musicPlaying = false;
-			}
-			using namespace std::chrono_literals;
+		using namespace std::chrono_literals;
+		while (PumpMusic())
 			std::this_thread::sleep_for(5ms);
-		}
 	}
 
 	ALCdevice* alDevice = nullptr;
@@ -673,6 +695,8 @@ public:
 		std::unique_ptr<AudioSource> music;
 		bool musicUpdate = false;
 	} musicThreadData;
+	std::unique_ptr<AudioSource> currentMusic;
+	bool musicPlaying = false;
 
 	RingQueue<float*> musicQueue;
 	int musicBufferCount = 0;

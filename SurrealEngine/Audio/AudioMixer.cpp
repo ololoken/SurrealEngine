@@ -217,6 +217,12 @@ public:
 		transfer.musicvolume = client.musicvolume;
 		transfer.soundvolume = client.soundvolume;
 
+#ifdef __EMSCRIPTEN__
+		lock.unlock();
+		if (player)
+			player->Update();
+#endif
+
 		for (int c : channelstopped)
 		{
 			auto it = channelplaying.find(c);

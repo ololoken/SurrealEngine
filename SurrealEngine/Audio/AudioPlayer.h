@@ -12,6 +12,7 @@ public:
 	static std::unique_ptr<AudioPlayer> Create(std::unique_ptr<AudioSource> source);
 
 	virtual ~AudioPlayer() = default;
+	virtual void Update() {}
 
 	int GetMixingFrequency() const
 	{

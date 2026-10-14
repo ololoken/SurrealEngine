@@ -35,9 +35,11 @@ struct InitDbgHelp
 	bool bHasSymbols;
 };
 
-#elif defined __linux__ || defined __APPLE__ || defined __OpenBSD__
+#elif defined __linux__ || defined __APPLE__ || defined __OpenBSD__ || defined __EMSCRIPTEN__
 
+#ifndef __EMSCRIPTEN__
 #include <execinfo.h>
+#endif
 #include <cxxabi.h>
 #include <cstring>
 #include <cstdlib>

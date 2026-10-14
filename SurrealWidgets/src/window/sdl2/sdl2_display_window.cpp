@@ -648,10 +648,15 @@ void SDL2DisplayWindow::OnTimerEvent(const SDL_UserEvent& event)
 
 void SDL2DisplayWindow::CreateGLContext()
 {
+#ifdef __EMSCRIPTEN__
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+#else
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-
+#endif
 	m_GLContext = SDL_GL_CreateContext(Handle.window);
 }
 
@@ -671,6 +676,12 @@ bool SDL2DisplayWindow::SetGLSwapInterval(int interval)
 
 void SDL2DisplayWindow::SwapGLBuffers()
 {
+#ifdef __EMSCRIPTEN__
+	// Emscripten's SDL_GL_SwapWindow calls emscripten_sleep so the browser can
+	// paint. That sleep never finishes inside an emscripten_set_main_loop
+	// callback, because the next frame cannot start until this one returns.
+	SDL_SetHint(SDL_HINT_EMSCRIPTEN_ASYNCIFY, "0");
+#endif
 	SDL_GL_SwapWindow(Handle.window);
 }
 

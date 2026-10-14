@@ -1120,6 +1120,32 @@ elseif(HAIKU)
 	set(THIRDPARTY_SOURCES ${THIRDPARTY_SOURCES} ${THIRDPARTY_UNIX_SOURCES})
 	add_definitions(-DUNIX -D_UNIX)
 	add_link_options(-pthread)
+elseif(EMSCRIPTEN)
+	set(SURREALCOMMON_SOURCES ${SURREALCOMMON_SOURCES})
+	list(REMOVE_ITEM SURREALCOMMON_SOURCES SurrealEngine/RenderDevice/OpenGL/GLFileResource.cpp)
+	list(APPEND SURREALCOMMON_SOURCES SurrealEngine/RenderDevice/OpenGL/WebGLFileResource.cpp)
+	set(SURREALCOMMON_LIBS ${SURREALCOMMON_LIBS} ${SURREALCOMMON_UNIX_LIBS} ${CMAKE_DL_LIBS} -lal)
+	set(THIRDPARTY_SOURCES ${THIRDPARTY_SOURCES} ${THIRDPARTY_UNIX_SOURCES})
+	add_definitions(-DUNIX -D_UNIX)
+	add_link_options(-sUSE_PTHREADS=0
+			--use-port=sdl2
+			-sJSPI -sASYNCIFY_STACK_SIZE=1MB
+			-sASYNCIFY_IGNORE_INDIRECT
+			-fwasm-exceptions
+			-sALLOW_MEMORY_GROWTH
+			-sMODULARIZE -sEXPORT_ES6
+			-sENVIRONMENT=web
+			-lGL -lal
+			-lidbfs.js -sCASE_INSENSITIVE_FS
+			-sMAX_WEBGL_VERSION=2
+			-sMIN_WEBGL_VERSION=2
+			-sFULL_ES2
+			-sGL_ENABLE_GET_PROC_ADDRESS
+			-sEXIT_RUNTIME
+			-sEXPORTED_RUNTIME_METHODS=callMain,addRunDependency,removeRunDependency,ENV,FS,PATH
+			--profiling-funcs -sASSERTIONS -g -gsource-map
+	)
+	add_compile_options(-sUSE_PTHREADS=0 -fwasm-exceptions --use-port=sdl2)
 else()
 	set(SURREALCOMMON_SOURCES ${SURREALCOMMON_SOURCES})
 	set(SURREALCOMMON_LIBS ${SURREALCOMMON_LIBS} ${SURREALCOMMON_UNIX_LIBS} ${CMAKE_DL_LIBS} -lasound)
@@ -1137,7 +1163,11 @@ if(MSVC)
 	set_source_files_properties(${SURREALVIDEO_SOURCES} PROPERTIES COMPILE_FLAGS "/wd4244 /wd4267 /wd4005 /wd4018 /wd4101 /wd4146 /wd4334 -D_CRT_SECURE_NO_WARNINGS /experimental:c11atomics")
 endif()
 
+if (EMSCRIPTEN)
+add_library(SurrealVideo STATIC ${SURREALVIDEO_SOURCES})
+else ()
 add_library(SurrealVideo SHARED ${SURREALVIDEO_SOURCES})
+endif ()
 target_include_directories(SurrealVideo PRIVATE SurrealVideo)
 set_target_properties(SurrealVideo PROPERTIES CXX_STANDARD 20)
 set_target_properties(SurrealVideo PROPERTIES C_STANDARD 17)
@@ -1218,6 +1248,14 @@ set_target_properties(zipdir PROPERTIES CXX_STANDARD 20)
 set_target_properties(zipdir PROPERTIES C_STANDARD 17)
 if (APPLE)
 	target_link_libraries(zipdir "-framework CoreFoundation")
+elseif(EMSCRIPTEN)
+	target_link_options(zipdir PRIVATE
+			-sSTACK_SIZE=8MB
+			-sALLOW_MEMORY_GROWTH
+			-sEXIT_RUNTIME
+			-sENVIRONMENT=node
+			-sNODERAWFS
+	)
 elseif(HAIKU)
 	target_link_libraries(zipdir "-lbe")
 endif()

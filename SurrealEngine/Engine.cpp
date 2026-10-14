@@ -11,7 +11,12 @@
 #include "Packages/Core/UFunction.h"
 #include "Packages/Core/USubsystem.h"
 #include "Packages/Core/Properties/UObjectProperty.h"
+#include "Packages/Core/Properties/UStructProperty.h"
 #include "Packages/Core/Properties/UStringProperty.h"
+#include "GC/GC.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include "Packages/Core/Properties/UFloatProperty.h"
 #include "Packages/Core/Properties/UIntProperty.h"
 #include "Packages/Engine/UClient.h"
@@ -149,15 +154,49 @@ void Engine::Run()
 
 	LoginPlayer();
 
-	auto objprop = GC::Alloc<UObjectProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
-	auto vecprop = GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
-	auto rotprop = GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
+#ifdef __EMSCRIPTEN__
+	// One browser frame per call. simulate_infinite_loop keeps Run() from returning
+	// into main, which would shut the runtime down under EXIT_RUNTIME.
+	emscripten_set_main_loop([]() {
+		if (!engine || !engine->TickGame())
+		{
+			emscripten_cancel_main_loop();
+			if (engine)
+				engine->Shutdown();
+		}
+	}, 0, true);
+#else
+	while (TickGame())
+	{
+	}
+	Shutdown();
+#endif
+}
 
-	bool firstCall = true;
+bool Engine::TickGame()
+{
+	if (quit)
+		return false;
 
-	float currentZoneTimeDilation = 1.0f; // Unreal 227 allows zones to specify their own time dilations
+	struct ViewProps
+	{
+		GCRoot<UObjectProperty> obj;
+		GCRoot<UStructProperty> vec;
+		GCRoot<UStructProperty> rot;
+	};
+	static ViewProps viewProps;
+	if (!viewProps.obj)
+	{
+		viewProps.obj.set(GC::Alloc<UObjectProperty>(NameString(), nullptr, ObjectFlags::NoFlags));
+		viewProps.vec.set(GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags));
+		viewProps.rot.set(GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags));
+	}
+	UObjectProperty* objprop = viewProps.obj.get();
+	UStructProperty* vecprop = viewProps.vec.get();
+	UStructProperty* rotprop = viewProps.rot.get();
 
-	while (!quit)
+	static float currentZoneTimeDilation = 1.0f; // Unreal 227 allows zones to specify their own time dilations
+
 	{
 		// Main game loop should consist of these 4 steps:
 		// Tick everything
@@ -305,6 +344,11 @@ void Engine::Run()
 		}
 	}
 
+	return !quit;
+}
+
+void Engine::Shutdown()
+{
 	LogMessage("Shutting down...");
 	window->UnlockCursor();
 

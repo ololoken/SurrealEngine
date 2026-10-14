@@ -430,6 +430,10 @@ std::string OS::executable_path()
 	}
 
 	return std::string(exePath);
+#elif defined(__EMSCRIPTEN__)
+	char cwd[PATH_MAX];
+	getcwd(cwd, sizeof(cwd));
+	return std::string(cwd);
 #else
 	#ifndef PROC_EXE_PATH
 	#define PROC_EXE_PATH "/proc/self/exe"

@@ -99,7 +99,12 @@ void UInternetLink::Resolve(const std::string& Domain)
 				ResolvedAddr.Port = htons(7777);
 			};
 
+#ifdef __EMSCRIPTEN__
+		lock.unlock();
+		threadMain();
+#else
 		Thread = std::thread(threadMain);
+#endif
 	}
 }
 

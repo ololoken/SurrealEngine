@@ -255,20 +255,37 @@ public:
 		}
 	}
 
+	void Update() override
+	{
+#ifdef __EMSCRIPTEN__
+		if (!mixer_stop_flag)
+		{
+			mix_fragment();
+			write_fragment();
+		}
+#endif
+	}
+
 	void start_mixer_thread()
 	{
+#ifndef __EMSCRIPTEN__
 		std::unique_lock<std::mutex> lock(mixer_mutex);
 		mixer_stop_flag = false;
 		lock.unlock();
 		mixer_thread = std::thread([this]() { mixer_thread_main(); });
+#endif
 	}
 
 	void stop_mixer_thread()
 	{
+#ifndef __EMSCRIPTEN__
 		std::unique_lock<std::mutex> lock(mixer_mutex);
 		mixer_stop_flag = true;
 		lock.unlock();
 		mixer_thread.join();
+#else
+		mixer_stop_flag = true;
+#endif
 	}
 
 	std::unique_ptr<AudioSource> source;
@@ -424,20 +441,37 @@ public:
 		}
 	}
 
+	void Update() override
+	{
+#ifdef __EMSCRIPTEN__
+		if (!mixer_stop_flag)
+		{
+			mix_fragment();
+			write_fragment();
+		}
+#endif
+	}
+
 	void start_mixer_thread()
 	{
+#ifndef __EMSCRIPTEN__
 		std::unique_lock<std::mutex> lock(mixer_mutex);
 		mixer_stop_flag = false;
 		lock.unlock();
 		mixer_thread = std::thread([this]() { mixer_thread_main(); });
+#endif
 	}
 
 	void stop_mixer_thread()
 	{
+#ifndef __EMSCRIPTEN__
 		std::unique_lock<std::mutex> lock(mixer_mutex);
 		mixer_stop_flag = true;
 		lock.unlock();
 		mixer_thread.join();
+#else
+		mixer_stop_flag = true;
+#endif
 	}
 
 	std::unique_ptr<AudioSource> source;
