@@ -4,6 +4,7 @@
 #include "Utils/JsonValue.h"
 #include "Utils/File.h"
 #include "VM/Frame.h"
+#include <cstdio>
 #include <unordered_set>
 
 void LogMessage(const std::string& message)
@@ -39,28 +40,34 @@ void Logger::LogMessage(const std::string& message)
 		}
 
 		for (const std::string& text : SplitNewlines(message))
-		{
-			LogMessageLine line;
-			line.Time = time;
-			line.Source = name;
-			line.Text = text;
-			Log.push_back(std::move(line));
-			if (printLogDebugger)
-				printLogDebugger(Log.back());
-		}
+			AddLogLine(name, text);
 	}
 	else
 	{
 		for (const std::string& text : SplitNewlines(message))
-		{
-			LogMessageLine line;
-			line.Time = time;
-			line.Text = text;
-			Log.push_back(std::move(line));
-			if (printLogDebugger)
-				printLogDebugger(Log.back());
-		}
+			AddLogLine("", text);
 	}
+}
+
+void Logger::AddLogLine(const std::string& source, const std::string& text)
+{
+	LogMessageLine line;
+	line.Time = time;
+	line.Source = source;
+	line.Text = text;
+	Log.push_back(std::move(line));
+	if (printLogDebugger)
+	{
+		printLogDebugger(Log.back());
+		return;
+	}
+
+	const LogMessageLine& logged = Log.back();
+	if (!logged.Source.empty())
+		std::fprintf(stdout, "%s: %s\n", logged.Source.c_str(), logged.Text.c_str());
+	else
+		std::fprintf(stdout, "%s\n", logged.Text.c_str());
+	std::fflush(stdout);
 }
 
 void Logger::LogUnimplemented(const std::string& message)

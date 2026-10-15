@@ -1808,7 +1808,7 @@ ExpressionEvalResult Frame::RunExpr(Expression* statementExpr, UObject* self, UO
 			if (pass == 0)
 			{
 				PushContext(self);
-				const auto& args = static_cast<VirtualFunctionExpression*>(expr)->Args;
+				const auto& args = static_cast<FinalFunctionExpression*>(expr)->Args;
 				for (auto it = args.rbegin(); it != args.rend(); ++it)
 				{
 					PushExpr(*it);

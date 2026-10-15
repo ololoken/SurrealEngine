@@ -3,7 +3,11 @@
 #include "RenderDevice.h"
 #include "LauncherSettings.h"
 #include "Vulkan/VulkanRenderDevice.h"
+#ifdef __EMSCRIPTEN__
+#include "WebGL/WebGLRenderDevice.h"
+#else
 #include "OpenGL/GLRenderDevice.h"
+#endif
 #ifdef WIN32
 #include "D3D11/D3D11RenderDevice.h"
 #endif
@@ -35,7 +39,12 @@ std::unique_ptr<RenderDevice> RenderDevice::Create(Widget* viewport, RenderAPI r
 	}
 	else if (renderAPI == RenderAPI::OpenGL)
 	{
+#ifdef __EMSCRIPTEN__
+		// The browser only offers WebGL 2, which the dedicated backend targets directly
+		return std::make_unique<WebGLRenderDevice>(viewport);
+#else
 		return std::make_unique<GLRenderDevice>(viewport);
+#endif
 	}
 #ifdef WIN32
 	else if (renderAPI == RenderAPI::D3D11)

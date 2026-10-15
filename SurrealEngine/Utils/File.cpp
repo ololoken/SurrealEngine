@@ -31,6 +31,9 @@ extern const char* __progname;
 #include <cstring>
 #include <sstream>
 #include <cstdio>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 #ifdef WIN32
 
@@ -246,12 +249,28 @@ void File::write_all_bytes(const std::string& filename, const void* data, size_t
 {
 	auto file = create_always(filename);
 	file->write(data, size);
+	file.reset();
+
+#ifdef __EMSCRIPTEN__
+	EM_ASM( { Module.callbacks?.onFileWrite?.({
+		path: UTF8ToString($0),
+		op: 'write'
+	}) }, filename.c_str() );
+#endif
 }
 
 void File::write_all_text(const std::string& filename, const std::string& text)
 {
 	auto file = create_always(filename);
 	file->write(text.data(), text.size());
+	file.reset();
+
+#ifdef __EMSCRIPTEN__
+	EM_ASM( { Module.callbacks?.onFileWrite?.({
+		path: UTF8ToString($0),
+		op: 'write'
+	}) }, filename.c_str() );
+#endif
 }
 
 Array<uint8_t> File::read_all_bytes(const std::string& filename)

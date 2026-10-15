@@ -13,10 +13,6 @@
 #include "Packages/Core/Properties/UObjectProperty.h"
 #include "Packages/Core/Properties/UStructProperty.h"
 #include "Packages/Core/Properties/UStringProperty.h"
-#include "GC/GC.h"
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#endif
 #include "Packages/Core/Properties/UFloatProperty.h"
 #include "Packages/Core/Properties/UIntProperty.h"
 #include "Packages/Engine/UClient.h"
@@ -122,6 +118,15 @@ Engine::~Engine()
 
 void Engine::Run()
 {
+	Startup();
+	while (TickGame())
+	{
+	}
+	Shutdown();
+}
+
+void Engine::Startup()
+{
 	LogMessage("Game: " + LaunchInfo.gameName + " (Version: " + LaunchInfo.gameVersionString + ")");
 	LoadEngineSettings();
 	LogMessage("Loaded Engine settings");
@@ -154,23 +159,10 @@ void Engine::Run()
 
 	LoginPlayer();
 
-#ifdef __EMSCRIPTEN__
-	// One browser frame per call. simulate_infinite_loop keeps Run() from returning
-	// into main, which would shut the runtime down under EXIT_RUNTIME.
-	emscripten_set_main_loop([]() {
-		if (!engine || !engine->TickGame())
-		{
-			emscripten_cancel_main_loop();
-			if (engine)
-				engine->Shutdown();
-		}
-	}, 0, true);
-#else
-	while (TickGame())
-	{
-	}
-	Shutdown();
-#endif
+	calcViewActorProp = GC::Alloc<UObjectProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
+	calcViewLocationProp = GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
+	calcViewRotationProp = GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
+	currentZoneTimeDilation = 1.0f;
 }
 
 bool Engine::TickGame()
@@ -178,24 +170,9 @@ bool Engine::TickGame()
 	if (quit)
 		return false;
 
-	struct ViewProps
-	{
-		GCRoot<UObjectProperty> obj;
-		GCRoot<UStructProperty> vec;
-		GCRoot<UStructProperty> rot;
-	};
-	static ViewProps viewProps;
-	if (!viewProps.obj)
-	{
-		viewProps.obj.set(GC::Alloc<UObjectProperty>(NameString(), nullptr, ObjectFlags::NoFlags));
-		viewProps.vec.set(GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags));
-		viewProps.rot.set(GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags));
-	}
-	UObjectProperty* objprop = viewProps.obj.get();
-	UStructProperty* vecprop = viewProps.vec.get();
-	UStructProperty* rotprop = viewProps.rot.get();
-
-	static float currentZoneTimeDilation = 1.0f; // Unreal 227 allows zones to specify their own time dilations
+	UObjectProperty* objprop = calcViewActorProp;
+	UStructProperty* vecprop = calcViewLocationProp;
+	UStructProperty* rotprop = calcViewRotationProp;
 
 	{
 		// Main game loop should consist of these 4 steps:

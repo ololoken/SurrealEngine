@@ -948,6 +948,22 @@ set(SURREALCOMMON_UNIX_LIBS
 	openal
 )
 
+# WebGL 2 render backend, only used by the Emscripten build
+set(SURREALCOMMON_WEBGL_SOURCES
+	SurrealEngine/RenderDevice/WebGL/WebGLRenderDevice.cpp
+	SurrealEngine/RenderDevice/WebGL/WebGLRenderDevice.h
+	SurrealEngine/RenderDevice/WebGL/WebGLFileResource.cpp
+	SurrealEngine/RenderDevice/WebGL/WebGLFileResource.h
+	SurrealEngine/RenderDevice/WebGL/WebGLHandles.h
+	SurrealEngine/RenderDevice/WebGL/WebGLTextureManager.cpp
+	SurrealEngine/RenderDevice/WebGL/WebGLTextureManager.h
+	SurrealEngine/RenderDevice/WebGL/WebGLTextureUploader.cpp
+	SurrealEngine/RenderDevice/WebGL/WebGLTextureUploader.h
+	SurrealEngine/RenderDevice/WebGL/WebGLUploadManager.cpp
+	SurrealEngine/RenderDevice/WebGL/WebGLUploadManager.h
+	SurrealEngine/RenderDevice/WebGL/WebGLCachedTexture.h
+)
+
 set(SURREALENGINE_SOURCES
 	SurrealEngine/MainGame.cpp
 )
@@ -1013,6 +1029,7 @@ source_group("SurrealEngine\\RenderDevice" REGULAR_EXPRESSION "${CMAKE_CURRENT_S
 source_group("SurrealEngine\\RenderDevice/Vulkan" REGULAR_EXPRESSION "${CMAKE_CURRENT_SOURCE_DIR}/SurrealEngine/RenderDevice/Vulkan/.+")
 source_group("SurrealEngine\\RenderDevice/OpenGL" REGULAR_EXPRESSION "${CMAKE_CURRENT_SOURCE_DIR}/SurrealEngine/RenderDevice/OpenGL/.+")
 source_group("SurrealEngine\\RenderDevice/OpenGL/gl_load" REGULAR_EXPRESSION "${CMAKE_CURRENT_SOURCE_DIR}/SurrealEngine/RenderDevice/OpenGL/gl_load/.+")
+source_group("SurrealEngine\\RenderDevice/WebGL" REGULAR_EXPRESSION "${CMAKE_CURRENT_SOURCE_DIR}/SurrealEngine/RenderDevice/WebGL/.+")
 source_group("SurrealEngine\\RenderDevice/D3D11" REGULAR_EXPRESSION "${CMAKE_CURRENT_SOURCE_DIR}/SurrealEngine/RenderDevice/D3D11/.+")
 source_group("SurrealEngine\\Render" REGULAR_EXPRESSION "${CMAKE_CURRENT_SOURCE_DIR}/SurrealEngine/Render/.+")
 source_group("SurrealEngine\\UI" REGULAR_EXPRESSION "${CMAKE_CURRENT_SOURCE_DIR}/SurrealEngine/UI/.+")
@@ -1122,14 +1139,17 @@ elseif(HAIKU)
 	add_link_options(-pthread)
 elseif(EMSCRIPTEN)
 	set(SURREALCOMMON_SOURCES ${SURREALCOMMON_SOURCES})
-	list(REMOVE_ITEM SURREALCOMMON_SOURCES SurrealEngine/RenderDevice/OpenGL/GLFileResource.cpp)
-	list(APPEND SURREALCOMMON_SOURCES SurrealEngine/RenderDevice/OpenGL/WebGLFileResource.cpp)
+	# The desktop OpenGL backend (and its gl_load function loader) is replaced by the WebGL backend
+	list(FILTER SURREALCOMMON_SOURCES EXCLUDE REGEX "SurrealEngine/RenderDevice/OpenGL/")
+	list(APPEND SURREALCOMMON_SOURCES ${SURREALCOMMON_WEBGL_SOURCES})
 	set(SURREALCOMMON_LIBS ${SURREALCOMMON_LIBS} ${SURREALCOMMON_UNIX_LIBS} ${CMAKE_DL_LIBS} -lal)
 	set(THIRDPARTY_SOURCES ${THIRDPARTY_SOURCES} ${THIRDPARTY_UNIX_SOURCES})
 	add_definitions(-DUNIX -D_UNIX)
 	add_link_options(-sUSE_PTHREADS=0
 			--use-port=sdl2
 			-sJSPI -sASYNCIFY_STACK_SIZE=1MB
+			-sSTACK_SIZE=8MB
+			-sINITIAL_MEMORY=1GB
 			-sASYNCIFY_IGNORE_INDIRECT
 			-fwasm-exceptions
 			-sALLOW_MEMORY_GROWTH

@@ -7,6 +7,9 @@
 #include "Packages/Core/UObject.h"
 #include "Packages/Core/UClass.h"
 #include "Utils/File.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 PackageWriter::PackageWriter(Package* package) : Source(package)
 {
@@ -49,6 +52,13 @@ void PackageWriter::Save(UObject* packageObject, std::string filename)
 		}
 
 		File::rename(tempFilename, filename);
+
+#ifdef __EMSCRIPTEN__
+		EM_ASM( { Module.callbacks?.onFileWrite?.({
+			path: UTF8ToString($0),
+			op: 'write'
+		}) }, filename.c_str() );
+#endif
 
 		if (filename == Source->GetPackageFilePath()) // To do: should we search all open packages?
 		{

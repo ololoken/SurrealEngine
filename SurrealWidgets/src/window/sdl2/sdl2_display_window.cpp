@@ -649,7 +649,8 @@ void SDL2DisplayWindow::OnTimerEvent(const SDL_UserEvent& event)
 void SDL2DisplayWindow::CreateGLContext()
 {
 #ifdef __EMSCRIPTEN__
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+	// OpenGL ES 3.0 = WebGL 2, which is what WebGLRenderDevice requires
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 #else

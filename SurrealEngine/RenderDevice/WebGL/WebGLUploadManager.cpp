@@ -1,0 +1,180 @@
+
+#include "Precomp.h"
+#include "WebGLUploadManager.h"
+#include "WebGLRenderDevice.h"
+#include "WebGLCachedTexture.h"
+
+WebGLUploadManager::WebGLUploadManager(WebGLRenderDevice* renderer) : renderer(renderer)
+{
+}
+
+WebGLUploadManager::~WebGLUploadManager()
+{
+}
+
+bool WebGLUploadManager::SupportsTextureFormat(TextureFormat Format) const
+{
+	return WebGLTextureUploader::GetUploader(Format);
+}
+
+void WebGLUploadManager::UploadTexture(WebGLCachedTexture* tex, const TextureInfo& Info, bool masked)
+{
+	int width = Info.USize;
+	int height = Info.VSize;
+	int mipcount = Info.NumMips;
+
+	WebGLTextureUploader* uploader = WebGLTextureUploader::GetUploader(Info.Format);
+
+	if ((uint32_t)Info.USize > 16384 || (uint32_t)Info.VSize > 16384 || !uploader)
+	{
+		width = 1;
+		height = 1;
+		mipcount = 1;
+		uploader = nullptr;
+	}
+
+	GLint internalFormat = GL_RGBA8;
+	GLenum format = GL_RGBA;
+	GLenum type = GL_UNSIGNED_BYTE;
+	bool compressed = false;
+	if (uploader)
+	{
+		internalFormat = uploader->GetInternalformat();
+		compressed = uploader->IsCompressed();
+		if (!compressed)
+		{
+			format = uploader->GetFormat();
+			type = uploader->GetType();
+		}
+	}
+
+	// Base texture must use complete 4x4 compression blocks or some drivers crash.
+	// We fix this by creating 1 or 2 additional mipmap levels that are empty.
+
+	int minSize = compressed ? 4 : 0;
+
+	if (!tex->Texture)
+	{
+		if (width < minSize || height < minSize)
+		{
+			if (width == 1 || height == 1)
+			{
+				width *= 4;
+				height *= 4;
+				mipcount += 2;
+				tex->DummyMipmapCount = 2;
+			}
+			else
+			{
+				width *= 2;
+				height *= 2;
+				mipcount += 1;
+				tex->DummyMipmapCount = 1;
+			}
+		}
+
+		tex->Texture = std::make_shared<WebGLTexture2D>();
+		glBindTexture(GL_TEXTURE_2D, tex->Texture->Handle);
+		renderer->InvalidateTextureUnit(0);
+		int mipwidth = width;
+		int mipheight = height;
+		for (int miplevel = 0; miplevel < mipcount; miplevel++)
+		{
+			if (compressed)
+			{
+				// GLES does not allow glTexImage2D with a compressed internal format
+				// and WebGL rejects null data, so define each level with zeroed blocks.
+				int mipsize = uploader->GetUploadSize(0, 0, mipwidth, mipheight);
+				uint8_t* zeros = GetUploadBuffer(mipsize);
+				memset(zeros, 0, mipsize);
+				glCompressedTexImage2D(GL_TEXTURE_2D, miplevel, internalFormat, mipwidth, mipheight, 0, mipsize, zeros);
+			}
+			else
+			{
+				glTexImage2D(GL_TEXTURE_2D, miplevel, internalFormat, mipwidth, mipheight, 0, format, type, nullptr);
+			}
+			renderer->CheckHotPathError("UploadTexture failed");
+			mipwidth = std::max(mipwidth >> 1, 1);
+			mipheight = std::max(mipheight >> 1, 1);
+		}
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, std::max(mipcount - 1, 0));
+	}
+
+	if (uploader)
+		UploadData(tex->Texture.get(), Info, masked, uploader, tex->DummyMipmapCount);
+	else
+		UploadWhite(tex->Texture.get());
+
+	renderer->Stats.Uploads++;
+}
+
+void WebGLUploadManager::UploadTextureRect(WebGLCachedTexture* tex, const TextureInfo& Info, int x, int y, int w, int h)
+{
+	WebGLTextureUploader* uploader = WebGLTextureUploader::GetUploader(Info.Format);
+	if (!uploader || uploader->IsCompressed() || Info.NumMips < 1 || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > Info.Mips[0].Width || y + h > Info.Mips[0].Height || Info.Mips[0].Data.empty())
+		return;
+
+	size_t pixelsSize = uploader->GetUploadSize(x, y, w, h);
+	pixelsSize = (pixelsSize + 15) / 16 * 16; // memory alignment
+
+	uint8_t* data = GetUploadBuffer(pixelsSize);
+	uploader->UploadRect(data, &Info.Mips[0], x, y, w, h, Info.Palette, false);
+
+	glBindTexture(GL_TEXTURE_2D, tex->Texture->Handle);
+	renderer->InvalidateTextureUnit(0);
+
+	glTexSubImage2D(GL_TEXTURE_2D, tex->DummyMipmapCount, x, y, w, h, uploader->GetFormat(), uploader->GetType(), data);
+	renderer->CheckHotPathError("UploadTextureRect failed");
+
+	renderer->Stats.RectUploads++;
+}
+
+void WebGLUploadManager::UploadData(WebGLTexture2D* image, const TextureInfo& Info, bool masked, WebGLTextureUploader* uploader, int dummyMipmapCount)
+{
+	glBindTexture(GL_TEXTURE_2D, image->Handle);
+	renderer->InvalidateTextureUnit(0);
+	for (int level = 0; level < Info.NumMips; level++)
+	{
+		UnrealMipmap* Mip = &Info.Mips[level];
+		if (!Mip->Data.empty())
+		{
+			uint32_t mipwidth = Mip->Width;
+			uint32_t mipheight = Mip->Height;
+
+			int mipsize = uploader->GetUploadSize(0, 0, mipwidth, mipheight);
+
+			auto data = (uint32_t*)GetUploadBuffer(mipsize);
+			uploader->UploadRect(data, Mip, 0, 0, mipwidth, mipheight, Info.Palette, masked);
+
+			if (!uploader->IsCompressed())
+			{
+				glTexSubImage2D(GL_TEXTURE_2D, level + dummyMipmapCount, 0, 0, mipwidth, mipheight, uploader->GetFormat(), uploader->GetType(), data);
+				renderer->CheckHotPathError("UploadData failed");
+			}
+			else
+			{
+				glCompressedTexSubImage2D(GL_TEXTURE_2D, level + dummyMipmapCount, 0, 0, mipwidth, mipheight, uploader->GetInternalformat(), mipsize, data);
+				renderer->CheckHotPathError("UploadData(compressed) failed");
+			}
+		}
+	}
+}
+
+void WebGLUploadManager::UploadWhite(WebGLTexture2D* image)
+{
+	auto data = (uint32_t*)GetUploadBuffer(sizeof(uint32_t));
+	data[0] = 0xffffffff;
+	glBindTexture(GL_TEXTURE_2D, image->Handle);
+	renderer->InvalidateTextureUnit(0);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	renderer->CheckHotPathError("UploadWhite failed");
+}
+
+uint8_t* WebGLUploadManager::GetUploadBuffer(size_t size)
+{
+	// Using uint32_t vector for dword alignment
+	size = (size + 3) / 4;
+	if (UploadBuffer.size() < size)
+		UploadBuffer.resize(size);
+	return (uint8_t*)UploadBuffer.data();
+}
