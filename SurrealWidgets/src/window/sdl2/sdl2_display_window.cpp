@@ -677,12 +677,6 @@ bool SDL2DisplayWindow::SetGLSwapInterval(int interval)
 
 void SDL2DisplayWindow::SwapGLBuffers()
 {
-#ifdef __EMSCRIPTEN__
-	// Emscripten's SDL_GL_SwapWindow calls emscripten_sleep so the browser can
-	// paint. That sleep never finishes inside an emscripten_set_main_loop
-	// callback, because the next frame cannot start until this one returns.
-	SDL_SetHint(SDL_HINT_EMSCRIPTEN_ASYNCIFY, "0");
-#endif
 	SDL_GL_SwapWindow(Handle.window);
 }
 

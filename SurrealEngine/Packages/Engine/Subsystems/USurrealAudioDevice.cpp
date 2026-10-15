@@ -149,7 +149,15 @@ void USurrealAudioDevice::InitDevice()
 	// TODO: Add option for music buffer count
 	// TODO: Add option for music buffer size
 	// m_Device = AudioDevice::Create(48000, 256, 16, 256);
+#ifdef __EMSCRIPTEN__
+	// 256-float chunks are only a few milliseconds. The browser schedules about 100ms of
+	// OpenAL audio ahead, on the same thread as rendering. A short queue underruns during
+	// a slow frame (a gap in the music) and the next frame then refills every chunk at once.
+	// ~40ms chunks and about a third of a second queued stay ahead of that.
+	m_Device = AudioDevice::Create(OutputRate.frequency, 256, 8, 4096);
+#else
 	m_Device = AudioDevice::Create(OutputRate.frequency, 256, 16, 256);
+#endif
 	LogMessage("Audio device initialized");
 }
 

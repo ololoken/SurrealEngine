@@ -1155,7 +1155,7 @@ elseif(EMSCRIPTEN)
 			-sALLOW_MEMORY_GROWTH
 			-sMODULARIZE -sEXPORT_ES6
 			-sENVIRONMENT=web
-			-lGL -lal
+			-lGL
 			-lidbfs.js -sCASE_INSENSITIVE_FS
 			-sMAX_WEBGL_VERSION=2
 			-sMIN_WEBGL_VERSION=2
@@ -1163,9 +1163,14 @@ elseif(EMSCRIPTEN)
 			-sGL_ENABLE_GET_PROC_ADDRESS
 			-sEXIT_RUNTIME
 			-sEXPORTED_RUNTIME_METHODS=callMain,addRunDependency,removeRunDependency,ENV,FS,PATH
-			--profiling-funcs -sASSERTIONS -g -gsource-map
+			-flto
+			#--profiling-funcs -sASSERTIONS -g -gsource-map
 	)
-	add_compile_options(-sUSE_PTHREADS=0 -fwasm-exceptions --use-port=sdl2)
+	add_compile_options(-sUSE_PTHREADS=0
+			-fwasm-exceptions
+			--use-port=sdl2
+			-flto
+	)
 else()
 	set(SURREALCOMMON_SOURCES ${SURREALCOMMON_SOURCES})
 	set(SURREALCOMMON_LIBS ${SURREALCOMMON_LIBS} ${SURREALCOMMON_UNIX_LIBS} ${CMAKE_DL_LIBS} -lasound)

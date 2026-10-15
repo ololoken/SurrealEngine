@@ -6,6 +6,7 @@
 #include "Native/NObject.h"
 #include "Packages/Engine/Actors/UActor.h"
 #include "Packages/Engine/Resources/USound.h"
+#include <cstring>
 #include <mutex>
 #include "Utils/Exception.h"
 #include <map>
@@ -79,9 +80,14 @@ public:
 
 	void SetPosition(vec3& newPosition)
 	{
-		position.x = newPosition.x;
-		position.y = newPosition.y;
-		position.z = -newPosition.z;
+		float x = newPosition.x;
+		float y = newPosition.y;
+		float z = -newPosition.z;
+		if (position.x == x && position.y == y && position.z == z)
+			return;
+		position.x = x;
+		position.y = y;
+		position.z = z;
 		alSourcefv(id, AL_POSITION, &position[0]);
 	}
 
@@ -408,6 +414,63 @@ public:
 		}
 	}
 
+	// Move decoded chunks onto the OpenAL stream. Recycled buffers keep playback from
+	// running dry; fresh buffers grow the queue until the whole pool is in use.
+	void FeedMusicStream(AudioSource* music, int maxChunks)
+	{
+		int format = (music->GetChannels() == 1) ? AL_FORMAT_MONO_FLOAT32 : AL_FORMAT_STEREO_FLOAT32;
+		int freq = music->GetFrequency();
+		int uploaded = 0;
+
+		ALint processed = 0;
+		alGetSourcei(alMusicSource, AL_BUFFERS_PROCESSED, &processed);
+		while (processed > 0 && uploaded < maxChunks && musicQueue.Size() > 0)
+		{
+			ALuint buffer = 0;
+			alSourceUnqueueBuffers(alMusicSource, 1, &buffer);
+			if (alGetError() != AL_NO_ERROR)
+				Exception::Throw("alSourceUnqueueBuffers failed in FeedMusicStream: " + getALErrorString());
+
+			alBufferData(buffer, format, musicQueue.Pop(), musicBufferSize * 4, freq);
+			if (alGetError() != AL_NO_ERROR)
+				Exception::Throw("alBufferData failed in FeedMusicStream: " + getALErrorString());
+
+			alSourceQueueBuffers(alMusicSource, 1, &buffer);
+			if (alGetError() != AL_NO_ERROR)
+				Exception::Throw("alSourceQueueBuffers failed in FeedMusicStream: " + getALErrorString());
+
+			processed--;
+			uploaded++;
+		}
+
+		while (uploaded < maxChunks && musicQueue.Size() > 0 && streamedMusicBuffers < musicBufferCount)
+		{
+			ALuint buffer = alMusicBuffers[streamedMusicBuffers];
+			alBufferData(buffer, format, musicQueue.Pop(), musicBufferSize * 4, freq);
+			if (alGetError() != AL_NO_ERROR)
+				Exception::Throw("alBufferData failed in FeedMusicStream: " + getALErrorString());
+
+			alSourceQueueBuffers(alMusicSource, 1, &buffer);
+			if (alGetError() != AL_NO_ERROR)
+				Exception::Throw("alSourceQueueBuffers failed in FeedMusicStream: " + getALErrorString());
+
+			streamedMusicBuffers++;
+			uploaded++;
+		}
+
+		if (musicPlaying)
+		{
+			ALint status = 0;
+			alGetSourcei(alMusicSource, AL_SOURCE_STATE, &status);
+			if (status == AL_STOPPED && streamedMusicBuffers > 0)
+			{
+				alSourcePlay(alMusicSource);
+				if (alGetError() != AL_NO_ERROR)
+					Exception::Throw("alSourcePlay failed in FeedMusicStream: " + getALErrorString());
+			}
+		}
+	}
+
 	void PlayMusicBuffer(AudioSource* music)
 	{
 		int format = (music->GetChannels() == 1) ? AL_FORMAT_MONO_FLOAT32 : AL_FORMAT_STEREO_FLOAT32;
@@ -481,17 +544,39 @@ public:
 		UActor* listener = engine->CameraActor;
 		if (listener)
 		{
-			// Update listener properties
+			// Update listener properties. Emscripten's OpenAL walks every source on each
+			// listener call, so unchanged values stay out of that path.
 			vec3& location = listener->Location();
 			vec3& velocity = listener->Velocity();
 
 			vec3 at, left, up;
 			Coords::Rotation(listener->Rotation()).GetAxes(at, left, up);
 
+			float x = location.x;
+			float y = location.y;
+			float z = -location.z;
+			if (!listenerSet || listenerPosition.x != x || listenerPosition.y != y || listenerPosition.z != z)
+			{
+				listenerPosition = vec3(x, y, z);
+				alListener3f(AL_POSITION, x, y, z);
+				listenerSet = true;
+			}
+
+			float vx = velocity.x;
+			float vy = velocity.y;
+			float vz = -velocity.z;
+			if (listenerVelocity.x != vx || listenerVelocity.y != vy || listenerVelocity.z != vz)
+			{
+				listenerVelocity = vec3(vx, vy, vz);
+				alListener3f(AL_VELOCITY, vx, vy, vz);
+			}
+
 			ALfloat listenerOri[6] = { up.x, up.y, -up.z, -at.x, -at.y, at.z };
-			alListener3f(AL_POSITION, location.x, location.y, -location.z);
-			alListener3f(AL_VELOCITY, velocity.x, velocity.y, -velocity.z);
-			alListenerfv(AL_ORIENTATION, listenerOri);
+			if (memcmp(listenerOrientation, listenerOri, sizeof(listenerOri)) != 0)
+			{
+				memcpy(listenerOrientation, listenerOri, sizeof(listenerOri));
+				alListenerfv(AL_ORIENTATION, listenerOri);
+			}
 		}
 
 #ifdef __EMSCRIPTEN__
@@ -508,21 +593,52 @@ public:
 			return false;
 		if (musicThreadData.musicUpdate)
 		{
-			if (musicPlaying)
+			// Stop marks every queued buffer processed. Unqueue what is actually queued;
+			// asking for the whole pool fails when playback had only filled part of it.
+			alSourceStop(alMusicSource);
+			ALint processed = 0;
+			alGetSourcei(alMusicSource, AL_BUFFERS_PROCESSED, &processed);
+			while (processed > 0)
 			{
-				alSourceStop(alMusicSource);
-				alSourceUnqueueBuffers(alMusicSource, (ALsizei)alMusicBuffers.size(), &alMusicBuffers[0]);
-				musicPlaying = false;
+				ALuint buffer = 0;
+				alSourceUnqueueBuffers(alMusicSource, 1, &buffer);
+				processed--;
 			}
+			musicPlaying = false;
 			currentMusic = std::move(musicThreadData.music);
 			musicThreadData.musicUpdate = false;
+			musicQueue.Clear();
+			streamedMusicBuffers = 0;
 		}
 		lock.unlock();
 		// Never touch anything from musicThreadData after this point.
 
 		if (currentMusic)
 		{
-			while (musicQueue.Size() < musicBufferCount)
+#ifdef __EMSCRIPTEN__
+			// The mixer runs on the game thread here. Decode and upload one chunk per
+			// frame so catching up after a hitch does not stall the frame that presents it.
+			constexpr int kMaxChunksPerPump = 1;
+			constexpr int kMinChunksToStart = 3;
+			int produced = 0;
+			while (produced < kMaxChunksPerPump && musicQueue.Size() < (size_t)musicBufferCount)
+			{
+				currentMusic->ReadSamples(musicQueue.GetNextFree(), musicBufferSize);
+				musicQueue.Push(musicQueue.GetNextFree());
+				produced++;
+			}
+
+			FeedMusicStream(currentMusic.get(), kMaxChunksPerPump);
+
+			if (!musicPlaying && streamedMusicBuffers >= kMinChunksToStart)
+			{
+				alSourcePlay(alMusicSource);
+				if (alGetError() != AL_NO_ERROR)
+					Exception::Throw("alSourcePlay failed in PumpMusic: " + getALErrorString());
+				musicPlaying = true;
+			}
+#else
+			while (musicQueue.Size() < (size_t)musicBufferCount)
 			{
 				// render a chunk of music
 				currentMusic->ReadSamples(musicQueue.GetNextFree(), musicBufferSize);
@@ -538,6 +654,7 @@ public:
 			{
 				UpdateMusicBuffer(currentMusic.get());
 			}
+#endif
 
 			// TODO: music fade in/out
 		}
@@ -697,6 +814,12 @@ public:
 	} musicThreadData;
 	std::unique_ptr<AudioSource> currentMusic;
 	bool musicPlaying = false;
+	int streamedMusicBuffers = 0;
+
+	bool listenerSet = false;
+	vec3 listenerPosition = vec3(0.0f);
+	vec3 listenerVelocity = vec3(0.0f);
+	float listenerOrientation[6] = {};
 
 	RingQueue<float*> musicQueue;
 	int musicBufferCount = 0;

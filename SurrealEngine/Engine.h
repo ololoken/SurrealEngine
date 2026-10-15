@@ -51,8 +51,6 @@ class UnrealURL;
 class VideoPlayer;
 class UnrealMipmap;
 class UFloatProperty;
-class UObjectProperty;
-class UStructProperty;
 class UConversationMissionList;
 class UConversationList;
 class UDXSaveInfo;
@@ -66,20 +64,13 @@ struct MeshFace;
 
 static constexpr int32_t DONT_SAVE_GAME = -2; // Since -1 might be used as the autosave slot in some UE1 games...
 
-class Engine final : public GameWindowHost
+class Engine : public GameWindowHost
 {
 public:
 	Engine(GameLaunchInfo launchinfo);
 	~Engine();
 
-	// Run() is Startup(), TickGame() until it returns false, then Shutdown(). The pieces are
-	// exposed separately for hosts that cannot block in a loop (the browser build drives
-	// TickGame from an animation frame callback).
 	void Run();
-	void Startup();
-	bool TickGame();
-	void Shutdown();
-
 	void ClientTravel(const std::string& URL, ETravelType travelType, bool transferItems);
 	UnrealURL GetDefaultURL(const std::string& map);
 	void LoadEntryMap();
@@ -155,18 +146,12 @@ public:
 
 	UFloatProperty* floatprop = nullptr;
 
-	// Parameter properties for the PlayerCalcView event, allocated by Startup()
-	UObjectProperty* calcViewActorProp = nullptr;
-	UStructProperty* calcViewLocationProp = nullptr;
-	UStructProperty* calcViewRotationProp = nullptr;
-	float currentZoneTimeDilation = 1.0f; // Unreal 227 allows zones to specify their own time dilations
-
-	ULevelInfo* EntryLevelInfo = nullptr;
-	ULevel* EntryLevel = nullptr;
-	UGameInfo* EntryGameInfo = nullptr;
-	Package* EntryLevelPackage = nullptr;
-
 	double TotalTime = 0.0;
+
+	Package* EntryLevelPackage = nullptr;
+	ULevel* EntryLevel = nullptr;
+	ULevelInfo* EntryLevelInfo = nullptr;
+	UGameInfo* EntryGameInfo = nullptr;
 
 	Package* LevelPackage = nullptr;
 	ULevel* Level = nullptr;

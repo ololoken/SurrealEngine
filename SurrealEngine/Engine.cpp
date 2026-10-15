@@ -11,7 +11,6 @@
 #include "Packages/Core/UFunction.h"
 #include "Packages/Core/USubsystem.h"
 #include "Packages/Core/Properties/UObjectProperty.h"
-#include "Packages/Core/Properties/UStructProperty.h"
 #include "Packages/Core/Properties/UStringProperty.h"
 #include "Packages/Core/Properties/UFloatProperty.h"
 #include "Packages/Core/Properties/UIntProperty.h"
@@ -62,6 +61,9 @@
 #include "Utils/Convert.h"
 #include <chrono>
 #include <set>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 Engine* engine = nullptr;
 
@@ -118,15 +120,6 @@ Engine::~Engine()
 
 void Engine::Run()
 {
-	Startup();
-	while (TickGame())
-	{
-	}
-	Shutdown();
-}
-
-void Engine::Startup()
-{
 	LogMessage("Game: " + LaunchInfo.gameName + " (Version: " + LaunchInfo.gameVersionString + ")");
 	LoadEngineSettings();
 	LogMessage("Loaded Engine settings");
@@ -159,22 +152,20 @@ void Engine::Startup()
 
 	LoginPlayer();
 
-	calcViewActorProp = GC::Alloc<UObjectProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
-	calcViewLocationProp = GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
-	calcViewRotationProp = GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
-	currentZoneTimeDilation = 1.0f;
-}
+	auto objprop = GC::Alloc<UObjectProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
+	auto vecprop = GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
+	auto rotprop = GC::Alloc<UStructProperty>(NameString(), nullptr, ObjectFlags::NoFlags);
 
-bool Engine::TickGame()
-{
-	if (quit)
-		return false;
+	bool firstCall = true;
 
-	UObjectProperty* objprop = calcViewActorProp;
-	UStructProperty* vecprop = calcViewLocationProp;
-	UStructProperty* rotprop = calcViewRotationProp;
+	float currentZoneTimeDilation = 1.0f; // Unreal 227 allows zones to specify their own time dilations
 
+	while (!quit)
 	{
+#ifdef __EMSCRIPTEN__
+		//let browser do render
+		emscripten_sleep(0);
+#endif
 		// Main game loop should consist of these 4 steps:
 		// Tick everything
 		// Render the scene
@@ -340,11 +331,6 @@ bool Engine::TickGame()
 		}
 	}
 
-	return !quit;
-}
-
-void Engine::Shutdown()
-{
 	LogMessage("Shutting down...");
 	window->UnlockCursor();
 
