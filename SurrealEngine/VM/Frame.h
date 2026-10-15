@@ -55,11 +55,24 @@ public:
 	void* Data = nullptr;
 };
 
+struct VMStackFrame
+{
+	// Maximum nesting depth of a single statement. Left-deep operator chains use about two
+	// expression slots per level (the call plus its pending right operand), so a statement
+	// like UT's TrainingDM.DMTutEvent4 message (16 chained $/@ operators) needs ~36 slots.
+	static const int MaxDepth = 128;
+
+	Expression* expr[MaxDepth];
+	int pass[MaxDepth];
+	ExpressionValue value[MaxDepth];
+	UObject* context[MaxDepth];
+	void* localVariables;
+};
+
 class Frame
 {
 public:
-	static ExpressionValue Call(UFunction* func, UObject* instance, Array<ExpressionValue> args);
-	static ExpressionValue Call(UFunction* func, UObject* instance, ArrayView<ExpressionValue> args);
+	static ExpressionValue Call(UFunction* func, UObject* instance, const ArrayView<ExpressionValue>& args);
 	static std::string GetCallstack();
 	static std::string GetDisassembly(Expression* statement);
 
@@ -101,13 +114,13 @@ public:
 
 private:
 	ExpressionEvalResult Run();
-	void ProcessSwitch(const ExpressionValue& condition);
+	void ProcessSwitch(const ExpressionValue& condition, VMStackFrame* stack);
 
-	static ExpressionEvalResult RunExpr(Expression* expr, UObject* self, UObject* context, void* localVariables);
+	static ExpressionEvalResult RunExpr(Expression* expr, UObject* self, UObject* context, VMStackFrame* stack);
 
-	static ExpressionValue CallNative(UFunction* func, UObject* instance, Array<ExpressionValue> args);
-	static ExpressionValue CallScript(UFunction* func, UObject* instance, Array<ExpressionValue> args);
-	static void TraceCall(UFunction* func, UObject* instance, const Array<ExpressionValue>& args);
+	static ExpressionValue CallNative(UFunction* func, UObject* instance, const ArrayView<ExpressionValue>& args);
+	static ExpressionValue CallScript(UFunction* func, UObject* instance, const ArrayView<ExpressionValue>& args);
+	static void TraceCall(UFunction* func, UObject* instance, const ArrayView<ExpressionValue>& args);
 
 	struct ActiveCallStackFrame
 	{

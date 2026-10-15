@@ -182,7 +182,7 @@ bool Engine::TickGame()
 		// Check if there is a new map to load (next level, saved game etc.): load it if that's the case
 
 		// Tick everything
-		if (LaunchInfo.IsUnreal1_227())
+		if (LaunchInfo.IsUnreal1_227() && viewport->Actor())
 			currentZoneTimeDilation = viewport->Actor()->PlayerReplicationInfo()->PlayerZone()->ZoneTimeDilation();
 
 		float realTimeElapsed = CalcTimeElapsed();
@@ -191,9 +191,11 @@ bool Engine::TickGame()
 
 		TotalTime += realTimeElapsed;
 
-		if (EntryLevel)
+		if (EntryLevel && EntryLevel != Level)
 			EntryLevelInfo->TimeSeconds() += entryLevelElapsed;
-		LevelInfo->TimeSeconds() += levelElapsed;
+		if (Level)
+			LevelInfo->TimeSeconds() += levelElapsed;
+
 		Logger::Get()->SetTimeSeconds(LevelInfo->TimeSeconds());
 
 		// Update the time fields
@@ -209,13 +211,6 @@ bool Engine::TickGame()
 		LevelInfo->Second() = timedesc->tm_sec;
 		LevelInfo->Millisecond() = 0; // No timedesc equivalent for LevelInfo->Millisecond()
 
-		UpdateInput(realTimeElapsed);
-
-		SetPause(!LevelInfo->Pauser().empty());
-
-		// Do NOT pause this Tick event otherwise some messages will stay on screen forever.
-		CallEvent(console, EventName::Tick, { ExpressionValue::FloatValue(levelElapsed) });
-
 		// To do: set these to true if the frame rate is too low
 		if (LaunchInfo.ue1Version >= 436)
 		{
@@ -223,7 +218,14 @@ bool Engine::TickGame()
 			LevelInfo->bAggressiveLOD() = false;
 		}
 
-		if (EntryLevel)
+		UpdateInput(realTimeElapsed);
+
+		SetPause(!LevelInfo->Pauser().empty());
+
+		// Do NOT pause this Tick event otherwise some messages will stay on screen forever.
+		CallEvent(console, EventName::Tick, { ExpressionValue::FloatValue(levelElapsed) });
+
+		if (EntryLevel && EntryLevel != Level)
 			EntryLevel->Tick(entryLevelElapsed, m_GamePaused);
 		Level->Tick(levelElapsed, m_GamePaused);
 
@@ -267,23 +269,24 @@ bool Engine::TickGame()
 			LevelInfo->NextSwitchCountdown() -= levelElapsed;
 			if (LevelInfo->NextSwitchCountdown() <= 0.0f)
 			{
-				// LoginPlayer only transfers travel actors when ClientTravelInfo.TravelType is
-				// TRAVEL_Relative, and TravelType is otherwise assigned only in ClientTravel. These
-				// NextURL routes never go through ClientTravel, so without setting it here they
-				// inherit whatever the last ClientTravel left behind (or TRAVEL_Absolute, the
-				// default) - which silently discarded the inventory the bNextItems branch exists
-				// specifically to carry. State the intent explicitly on each branch instead of
-				// depending on leftover state.
+				// LoginPlayer only transfers travel actors when ClientTravelInfo.TransferItems is
+				// set, and TravelType/TransferItems are otherwise assigned only in ClientTravel.
+				// These NextURL routes never go through ClientTravel, so without setting them here
+				// they inherit whatever the last ClientTravel left behind - which could silently
+				// discard the inventory the bNextItems branch exists specifically to carry. State
+				// the intent explicitly on each branch instead of depending on leftover state.
 				if (UnrealURL(LevelInfo->NextURL()).HasOption("restart"))
 				{
 					// Passes the level's own TravelInfo back in, so it means to preserve it.
 					ClientTravelInfo.TravelType = ETravelType::TRAVEL_Relative;
+					ClientTravelInfo.TransferItems = true;
 					LoadMap(LevelInfo->URL, Level->TravelInfo);
 					LoginPlayer();
 				}
 				else if (LevelInfo->bNextItems())
 				{
 					ClientTravelInfo.TravelType = ETravelType::TRAVEL_Relative;
+					ClientTravelInfo.TransferItems = true;
 					LoadMap(UnrealURL(LevelInfo->URL, LevelInfo->NextURL()), CreateTravelInfo(true));
 					LoginPlayer();
 				}
@@ -291,6 +294,7 @@ bool Engine::TickGame()
 				{
 					// Deliberately carries nothing - it passes no travel info at all.
 					ClientTravelInfo.TravelType = ETravelType::TRAVEL_Absolute;
+					ClientTravelInfo.TransferItems = false;
 					LoadMap(UnrealURL(LevelInfo->URL, LevelInfo->NextURL()), {});
 					LoginPlayer();
 				}
@@ -318,6 +322,21 @@ bool Engine::TickGame()
 			LogMessage("Client travel to " + url.ToString());
 			LoadMap(url, CreateTravelInfo(ClientTravelInfo.TransferItems));
 			LoginPlayer();
+		}
+
+		if (ClientTravelInfo.TravelToEntryLevel)
+		{
+			ClientTravelInfo.TravelToEntryLevel = false;
+			if (EntryLevel && Level != EntryLevel)
+			{
+				LogMessage("Client travel to entry");
+				UnloadMap();
+				LevelPackage = EntryLevelPackage;
+				Level = EntryLevel;
+				LevelInfo = EntryLevelInfo;
+				GameInfo = EntryGameInfo;
+				LoginPlayer();
+			}
 		}
 	}
 
@@ -580,6 +599,14 @@ void Engine::ClientTravel(const std::string& newURL, ETravelType travelType, boo
 {
 	UnrealURL url(newURL);
 
+	if (url.HasOption("entry"))
+	{
+		// Intro map travels to ?entry when escape is pressed.
+		// It wants EntryLevel to be active.
+		ClientTravelInfo.TravelToEntryLevel = true;
+		return;
+	}
+
 	// If the URL doesn't contain the player info, add them here.
 	// As they have to persist somehow
 	for (std::string optionKey : { "Name", "Class", "team", "skin", "Face", "Voice", "OverrideClass" })
@@ -654,26 +681,29 @@ void Engine::LoadEntryMap()
 	// The entry map is the map you see in the game when no other map is playing. For example when disconnected from a server. It is always loaded and running.
 	const auto entryMapName = packages->GetIniValue("System", "URL", "EntryMap", "Entry");
 	LoadMap(GetDefaultURL(entryMapName));
-	EntryLevelInfo = LevelInfo;
+	EntryLevelPackage = LevelPackage;
 	EntryLevel = Level;
-	EntryLevelPackage = std::move(LevelPackage);
-	LevelInfo = nullptr;
+	EntryLevelInfo = LevelInfo;
+	EntryGameInfo = GameInfo;
+	LevelPackage = nullptr;
 	Level = nullptr;
+	LevelInfo = nullptr;
+	GameInfo = nullptr;
 	viewport->Actor() = nullptr;
 }
 
 void Engine::UnloadMap()
 {
-	if (!LevelPackage)
-		return;
+	if (LevelPackage && LevelPackage != EntryLevelPackage)
+		packages->UnloadPackage(LevelPackage);
 
-	LevelInfo = nullptr;
-	if (packages->IsDeusEx())
-		DeusExLevelInfo = nullptr;
+	LevelPackage = nullptr;
 	Level = nullptr;
-	viewport->Actor() = nullptr;
+	LevelInfo = nullptr;
+	GameInfo = nullptr;
+	DeusExLevelInfo = nullptr;
 	dxRootWindow = nullptr;
-	packages->UnloadPackage(std::move(LevelPackage));
+	viewport->Actor() = nullptr;
 
 	// GC::Collect();
 }
@@ -684,9 +714,6 @@ void Engine::LoadMap(const UnrealURL& url, const std::map<std::string, std::stri
 
 	if (Level)
 		CallEvent(console, EventName::NotifyLevelChange);
-
-	if (url.HasOption("entry")) // Not sure what the purpose of this kind of travel is - do nothing for now.
-		return;
 
 	audiodev->StopSounds();
 	UnloadMap();
@@ -791,9 +818,6 @@ void Engine::LoadFromSaveFile(const UnrealURL& url)
 
 	if (Level)
 		CallEvent(console, EventName::NotifyLevelChange);
-
-	if (url.HasOption("entry")) // Not sure what the purpose of this kind of travel is - do nothing for now.
-		return;
 
 	Package* savefilePackage = nullptr;
 	uint32_t slotNum = 0;
@@ -1006,7 +1030,10 @@ void Engine::LoginPlayer()
 	CallEvent(pawn, EventName::TravelPreAccept);
 
 	Array<UObject*> acceptedObjects;
-	if (actorActuallySpawned && ClientTravelInfo.TravelType == ETravelType::TRAVEL_Relative)
+	// In UE1 the item transfer is governed by the bItems argument of ClientTravel/ServerTravel,
+	// not by the travel type: UT's ladder, Training* and LadderTransition all travel with
+	// (TRAVEL_Absolute, bItems=True) and rely on LadderInventory arriving in the next map.
+	if (actorActuallySpawned && ClientTravelInfo.TransferItems)
 	{
 		std::string playerName = url.GetOption("Name");
 		if (playerName.empty())
@@ -1821,7 +1848,8 @@ void Engine::InputEvent(EInputKey key, EInputType type, int delta)
 			{
 				if (it->second == key)
 				{
-					viewport->Actor()->SetBool(it->first, false);
+					if (viewport->Actor())
+						viewport->Actor()->SetBool(it->first, false);
 					it = activeInputButtons.erase(it);
 				}
 				else
@@ -1834,7 +1862,8 @@ void Engine::InputEvent(EInputKey key, EInputType type, int delta)
 			{
 				if (it->second.Key == key)
 				{
-					viewport->Actor()->SetFloat(it->first, 0.0f);
+					if (viewport->Actor())
+						viewport->Actor()->SetFloat(it->first, 0.0f);
 					it = activeInputAxes.erase(it);
 				}
 				else

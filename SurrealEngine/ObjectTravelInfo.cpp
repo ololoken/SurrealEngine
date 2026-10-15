@@ -12,6 +12,10 @@
 #include <sstream>
 #include <algorithm>
 
+// Marks an object property value that is a class reference rather than a travel object name.
+// Item names are "player"/"itemN", so a "class:" prefix cannot collide with them.
+static const std::string ClassRefPrefix = "class:";
+
 std::string ActorTravelInfo::Create(UPlayerPawn* pawn, bool transferItems)
 {
 	// Collect all actors we need to travel and give them a name each
@@ -35,7 +39,10 @@ std::string ActorTravelInfo::Create(UPlayerPawn* pawn, bool transferItems)
 				if (auto objProperty = UObject::TryCast<UObjectProperty>(property))
 				{
 					UObject* value = *static_cast<UObject**>(cur->GetProperty(objProperty));
-					if (value && travelObjectNames.find(value) == travelObjectNames.end())
+					// Class references (class<X> properties, e.g. LadderInventory.CurrentLadder) are
+					// not travel objects: they are serialized by name in CreateObject and resolved
+					// with FindClass on accept. Treating them as items would create an empty UClass.
+					if (value && !UObject::TryCast<UClass>(value) && travelObjectNames.find(value) == travelObjectNames.end())
 					{
 						std::string name = "item" + std::to_string(processList.size());
 						travelObjectNames[value] = name;
@@ -89,7 +96,12 @@ ActorTravelInfo::TravelObject ActorTravelInfo::CreateObject(UObject* travelObjec
 		{
 			UObject* value = *static_cast<UObject**>(travelObject->GetProperty(objProperty));
 			std::string name;
-			if (value)
+			if (auto cls = UObject::TryCast<UClass>(value))
+			{
+				// Class reference: store the fully qualified class name (e.g. Botpack.LadderDMGOTY)
+				name = ClassRefPrefix + cls->package->GetPackageName().ToString() + "." + cls->Name.ToString();
+			}
+			else if (value)
 			{
 				auto it = travelObjects.find(value);
 				if (it != travelObjects.end())
@@ -192,7 +204,16 @@ Array<UObject*> ActorTravelInfo::Accept(UPlayerPawn* pawn, const std::string& tr
 			if (auto objProperty = UObject::TryCast<UObjectProperty>(property))
 			{
 				auto obj = static_cast<UObject**>(acceptedObject->GetProperty(objProperty));
-				if (value != "None")
+				if (value.compare(0, ClassRefPrefix.size(), ClassRefPrefix) == 0)
+				{
+					std::string className = value.substr(ClassRefPrefix.size());
+					UClass* cls = engine->packages->FindClass(className);
+					if (cls)
+						*obj = cls;
+					else
+						LogMessage("Warning: could not find travel class reference: " + className);
+				}
+				else if (value != "None")
 				{
 					auto it = nameToObject.find(value);
 					if (it != nameToObject.end())
