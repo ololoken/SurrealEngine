@@ -45,20 +45,6 @@ struct Breakpoint
 	bool Enabled = true;
 };
 
-struct VMStackFrame
-{
-	// Maximum nesting depth of a single statement. Left-deep operator chains use about two
-	// expression slots per level (the call plus its pending right operand), so a statement
-	// like UT's TrainingDM.DMTutEvent4 message (16 chained $/@ operators) needs ~36 slots.
-	static const int MaxDepth = 128;
-
-	Expression* expr[MaxDepth];
-	int pass[MaxDepth];
-	ExpressionValue value[MaxDepth];
-	UObject* context[MaxDepth];
-	void* localVariables;
-};
-
 class Frame
 {
 public:
@@ -85,7 +71,7 @@ public:
 
 	static std::unique_ptr<Iterator> CreatedIterator;
 
-	Frame(UObject* instance, UStruct* func, size_t statementIndex = 0);
+	Frame(UObject* instance, UStruct* func, size_t statementIndex, bool isStateFrame);
 	~Frame();
 
 	void SetState(UStruct* func);
@@ -104,6 +90,7 @@ private:
 	void InitVariables();
 	void DeinitVariables();
 
+	bool IsStateFrame = false;
 	void* Variables = nullptr;
 	UObject* Object = nullptr;
 	UStruct* Func = nullptr;
@@ -112,9 +99,9 @@ private:
 	Array<std::unique_ptr<Iterator>> Iterators;
 
 	ExpressionEvalResult Run();
-	void ProcessSwitch(const ExpressionValue& condition, VMStackFrame* stack);
+	void ProcessSwitch(const ExpressionValue& condition);
 
-	static ExpressionEvalResult RunExpr(Expression* expr, UObject* self, UObject* context, VMStackFrame* stack);
+	static ExpressionEvalResult RunExpr(Expression* expr, UObject* self, UObject* context, void* variables);
 	static ExpressionValue CallNative(UFunction* func, UObject* instance, const ArrayView<ExpressionValue>& args);
 	static void TraceCall(UFunction* func, UObject* instance, const ArrayView<ExpressionValue>& args);
 
