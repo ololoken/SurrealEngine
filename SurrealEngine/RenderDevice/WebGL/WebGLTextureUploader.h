@@ -70,6 +70,18 @@ public:
 	void UploadRect(void* dst, UnrealMipmap* mip, int x, int y, int w, int h, TextureColor* palette, bool masked) override;
 };
 
+// Source texels are 32-bit float, already in 0..1. Stored as RGBA8 so the scene
+// samplers can filter them without OES_texture_float_linear, and so a dynamic
+// lightmap update uploads a quarter of the bytes.
+class WebGLTextureUploader_RGBA32F : public WebGLTextureUploader
+{
+public:
+	WebGLTextureUploader_RGBA32F() : WebGLTextureUploader(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE) { }
+
+	int GetUploadSize(int x, int y, int w, int h) override;
+	void UploadRect(void* dst, UnrealMipmap* mip, int x, int y, int w, int h, TextureColor* palette, bool masked) override;
+};
+
 class WebGLTextureUploader_Simple : public WebGLTextureUploader
 {
 public:

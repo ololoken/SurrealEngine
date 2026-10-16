@@ -97,7 +97,7 @@ WebGLCachedTexture* WebGLTextureManager::CreateNullTexture()
 	// GL_UNSIGNED_INT_8_8_8_8 does not exist in GLES; four 0xff bytes is the same white pixel.
 	uint8_t white[4] = { 255, 255, 255, 255 };
 	NullTexture->Texture = std::make_shared<WebGLTexture2D>();
-	glBindTexture(GL_TEXTURE_2D, NullTexture->Texture->Handle);
+	renderer->BindTexture2D(NullTexture->Texture->Handle);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 	ThrowIfWebGLError("CreateNullTexture failed");

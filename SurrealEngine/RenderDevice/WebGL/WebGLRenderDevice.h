@@ -125,6 +125,8 @@ public:
 		PPBlurLevel BlurLevels[NumBloomLevels];
 		int Width = 0;
 		int Height = 0;
+		bool BuiltWithBloom = false;
+		bool ColorIsFloat = false;
 	} SceneBuffers;
 
 	struct ScenePipelineState
@@ -239,9 +241,9 @@ public:
 			ThrowIfWebGLError(message);
 	}
 
-	// Texture uploads bind to whatever unit is active (unit 0 outside of SetTextures),
-	// which the state cache cannot see.
+	// Uploads go through BindTexture2D so the unit cache stays valid.
 	void InvalidateTextureUnit(int unit) { StateCache.Textures[unit] = GLStateCache::Unknown; }
+	void BindTexture2D(GLuint handle);
 
 private:
 	struct ComplexSurfaceInfo
@@ -358,10 +360,13 @@ private:
 		float BlendConstants[4] = {};
 		const WebGLDepthStencilState* DepthStencilState = nullptr;
 		const WebGLRasterizerState* RasterizerState = nullptr;
+		int ActiveUnit = -1;
+		GLuint VertexArray = Unknown;
 	};
 	GLStateCache StateCache;
 	void ResetStateCache();
 	void UseProgram(GLuint program);
+	void BindVertexArray(GLuint vao);
 
 	void SetViewport(const WebGLViewport& viewport);
 	void SetBufferData(GLenum target, GLenum usage, WebGLBuffer* buffer, const void* data, size_t size);
@@ -403,11 +408,9 @@ private:
 	bool HasAnisotropicFiltering = false;
 	bool HasColorBufferFloat = false;
 
-	// glGetError is a synchronous round trip to the browser's GPU process, so the per-frame
-	// paths only check when SURREAL_WEBGL_VALIDATE is set in the environment. Without it,
-	// Unlock polls the (sticky) error state every few dozen frames instead.
+	// glGetError is a synchronous round trip to the browser's GPU process. The per-frame
+	// paths only check when SURREAL_WEBGL_VALIDATE is set in the environment.
 	bool ValidateEveryCall = false;
-	uint32_t FramesSinceErrorCheck = 0;
 
 	bool CurrentFullscreen = 0;
 	int CurrentSizeX = 0;

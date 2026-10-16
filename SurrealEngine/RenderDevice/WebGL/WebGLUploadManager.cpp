@@ -74,8 +74,7 @@ void WebGLUploadManager::UploadTexture(WebGLCachedTexture* tex, const TextureInf
 		}
 
 		tex->Texture = std::make_shared<WebGLTexture2D>();
-		glBindTexture(GL_TEXTURE_2D, tex->Texture->Handle);
-		renderer->InvalidateTextureUnit(0);
+		renderer->BindTexture2D(tex->Texture->Handle);
 		int mipwidth = width;
 		int mipheight = height;
 		for (int miplevel = 0; miplevel < mipcount; miplevel++)
@@ -120,8 +119,7 @@ void WebGLUploadManager::UploadTextureRect(WebGLCachedTexture* tex, const Textur
 	uint8_t* data = GetUploadBuffer(pixelsSize);
 	uploader->UploadRect(data, &Info.Mips[0], x, y, w, h, Info.Palette, false);
 
-	glBindTexture(GL_TEXTURE_2D, tex->Texture->Handle);
-	renderer->InvalidateTextureUnit(0);
+	renderer->BindTexture2D(tex->Texture->Handle);
 
 	glTexSubImage2D(GL_TEXTURE_2D, tex->DummyMipmapCount, x, y, w, h, uploader->GetFormat(), uploader->GetType(), data);
 	renderer->CheckHotPathError("UploadTextureRect failed");
@@ -131,8 +129,7 @@ void WebGLUploadManager::UploadTextureRect(WebGLCachedTexture* tex, const Textur
 
 void WebGLUploadManager::UploadData(WebGLTexture2D* image, const TextureInfo& Info, bool masked, WebGLTextureUploader* uploader, int dummyMipmapCount)
 {
-	glBindTexture(GL_TEXTURE_2D, image->Handle);
-	renderer->InvalidateTextureUnit(0);
+	renderer->BindTexture2D(image->Handle);
 	for (int level = 0; level < Info.NumMips; level++)
 	{
 		UnrealMipmap* Mip = &Info.Mips[level];
@@ -164,8 +161,7 @@ void WebGLUploadManager::UploadWhite(WebGLTexture2D* image)
 {
 	auto data = (uint32_t*)GetUploadBuffer(sizeof(uint32_t));
 	data[0] = 0xffffffff;
-	glBindTexture(GL_TEXTURE_2D, image->Handle);
-	renderer->InvalidateTextureUnit(0);
+	renderer->BindTexture2D(image->Handle);
 	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, data);
 	renderer->CheckHotPathError("UploadWhite failed");
 }

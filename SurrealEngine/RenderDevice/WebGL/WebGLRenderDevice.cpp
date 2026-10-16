@@ -140,17 +140,21 @@ void WebGLRenderDevice::Exit()
 
 void WebGLRenderDevice::ResizeSceneBuffers(int width, int height)
 {
-	if (SceneBuffers.Width == width && SceneBuffers.Height == height && SceneBuffers.ColorBuffer && SceneBuffers.DepthBuffer && SceneBuffers.PPImage[0] && SceneBuffers.PPImage[1])
+	bool wantFloat = ActiveHdr && HasColorBufferFloat;
+	if (SceneBuffers.Width == width && SceneBuffers.Height == height && SceneBuffers.ColorBuffer && SceneBuffers.DepthBuffer && SceneBuffers.PPImage[0] && SceneBuffers.PPImage[1] && SceneBuffers.BuiltWithBloom == Bloom && SceneBuffers.ColorIsFloat == wantFloat)
 		return;
 
 	ReleaseSceneBuffers();
 
 	SceneBuffers.Width = width;
 	SceneBuffers.Height = height;
+	SceneBuffers.BuiltWithBloom = Bloom;
+	SceneBuffers.ColorIsFloat = wantFloat;
 
-	// RGBA16F is only color-renderable with EXT_color_buffer_float. Fall back to RGBA8 otherwise.
-	GLint colorFormat = HasColorBufferFloat ? GL_RGBA16F : GL_RGBA8;
-	GLenum colorType = HasColorBufferFloat ? GL_FLOAT : GL_UNSIGNED_BYTE;
+	// Float targets are only worth the bandwidth when HDR is on. Otherwise 10-bit
+	// is enough for the dithered present pass and is a single 4-byte texel.
+	GLint colorFormat = wantFloat ? GL_RGBA16F : GL_RGB10_A2;
+	GLenum colorType = wantFloat ? GL_FLOAT : GL_UNSIGNED_INT_2_10_10_10_REV;
 
 	auto createColorTexture = [&](std::shared_ptr<WebGLTexture2D>& texture, int w, int h, const char* name)
 	{
@@ -178,7 +182,7 @@ void WebGLRenderDevice::ResizeSceneBuffers(int width, int height)
 
 	SceneBuffers.DepthBuffer = std::make_shared<WebGLTexture2D>();
 	glBindTexture(GL_TEXTURE_2D, SceneBuffers.DepthBuffer->Handle);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, SceneBuffers.Width, SceneBuffers.Height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, SceneBuffers.Width, SceneBuffers.Height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 	ThrowIfWebGLError("glTexImage2D(SceneBuffers.DepthBuffer) failed");
 
@@ -190,20 +194,23 @@ void WebGLRenderDevice::ResizeSceneBuffers(int width, int height)
 	for (int i = 0; i < 2; i++)
 		createFramebuffer(SceneBuffers.PPFramebuffer[i], SceneBuffers.PPImage[i].get(), nullptr, "SceneBuffers.PPFramebuffer");
 
-	int bloomWidth = width;
-	int bloomHeight = height;
-	for (PPBlurLevel& level : SceneBuffers.BlurLevels)
+	if (Bloom)
 	{
-		bloomWidth = (bloomWidth + 1) / 2;
-		bloomHeight = (bloomHeight + 1) / 2;
+		int bloomWidth = width;
+		int bloomHeight = height;
+		for (PPBlurLevel& level : SceneBuffers.BlurLevels)
+		{
+			bloomWidth = (bloomWidth + 1) / 2;
+			bloomHeight = (bloomHeight + 1) / 2;
 
-		createColorTexture(level.VTexture, bloomWidth, bloomHeight, "SceneBuffers.BlurLevels.VTexture");
-		createColorTexture(level.HTexture, bloomWidth, bloomHeight, "SceneBuffers.BlurLevels.HTexture");
-		createFramebuffer(level.VFramebuffer, level.VTexture.get(), nullptr, "SceneBuffers.BlurLevels.VFramebuffer");
-		createFramebuffer(level.HFramebuffer, level.HTexture.get(), nullptr, "SceneBuffers.BlurLevels.HFramebuffer");
+			createColorTexture(level.VTexture, bloomWidth, bloomHeight, "SceneBuffers.BlurLevels.VTexture");
+			createColorTexture(level.HTexture, bloomWidth, bloomHeight, "SceneBuffers.BlurLevels.HTexture");
+			createFramebuffer(level.VFramebuffer, level.VTexture.get(), nullptr, "SceneBuffers.BlurLevels.VFramebuffer");
+			createFramebuffer(level.HFramebuffer, level.HTexture.get(), nullptr, "SceneBuffers.BlurLevels.HFramebuffer");
 
-		level.Width = bloomWidth;
-		level.Height = bloomHeight;
+			level.Width = bloomWidth;
+			level.Height = bloomHeight;
+		}
 	}
 
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -256,13 +263,8 @@ void WebGLRenderDevice::CreateScenePass()
 				blendDesc.DestBlend = GL_ONE_MINUS_SRC_ALPHA;
 				blendDesc.DestBlendAlpha = GL_ONE_MINUS_SRC_ALPHA;
 				break;
-			case 3: // Hmm, is it faster to keep the blend mode enabled or to toggle it?
-				blendDesc.BlendOp = GL_FUNC_ADD;
-				blendDesc.BlendOpAlpha = GL_FUNC_ADD;
-				blendDesc.SrcBlend = GL_ONE;
-				blendDesc.SrcBlendAlpha = GL_ONE;
-				blendDesc.DestBlend = GL_ZERO;
-				blendDesc.DestBlendAlpha = GL_ZERO;
+			case 3: // Opaque. A ONE/ZERO blend is the same pixels with the blend unit left on.
+				blendDesc.BlendEnable = false;
 				break;
 			}
 			if (i & 4) // PF_Invisible
@@ -547,7 +549,7 @@ void WebGLRenderDevice::RunBloomPass()
 
 	WebGLBuffer* cbs[1] = { BloomPass.ConstantBuffer.get() };
 	WebGLSampler* samplers[1] = { PresentPass.LinearSampler.get() };
-	glBindVertexArray(PresentPass.PPStepLayout->Handle);
+	BindVertexArray(PresentPass.PPStepLayout->Handle);
 	SetRasterizerState(PresentPass.RasterizerState.get());
 	SetUniformBuffers(0, 1, cbs);
 	SetSamplers(0, 1, samplers);
@@ -805,7 +807,7 @@ void WebGLRenderDevice::MapVertices(bool nextBuffer)
 		{
 			glBindBuffer(GL_ARRAY_BUFFER, ScenePass.VertexBuffer->Handle);
 			glBufferData(GL_ARRAY_BUFFER, SceneVertexBufferSize * sizeof(WebGLSceneVertex), nullptr, GL_STREAM_DRAW);
-			glBindVertexArray(ScenePass.InputLayout->Handle);
+			BindVertexArray(ScenePass.InputLayout->Handle);
 			glBufferData(GL_ELEMENT_ARRAY_BUFFER, SceneIndexBufferSize * sizeof(uint32_t), nullptr, GL_STREAM_DRAW);
 			CheckHotPathError("Could not orphan the scene buffers");
 		}
@@ -852,7 +854,7 @@ void WebGLRenderDevice::UnmapVertices()
 		if (SceneIndexPos > UploadedIndexPos && ScenePass.IndexBuffer && ScenePass.InputLayout)
 		{
 			// Bind through the VAO so the element array binding stays consistent with it
-			glBindVertexArray(ScenePass.InputLayout->Handle);
+			BindVertexArray(ScenePass.InputLayout->Handle);
 			glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, UploadedIndexPos * sizeof(uint32_t), (SceneIndexPos - UploadedIndexPos) * sizeof(uint32_t), StagingIndexes.data() + UploadedIndexPos);
 			CheckHotPathError("Could not upload ScenePass.IndexBuffer");
 			UploadedIndexPos = SceneIndexPos;
@@ -912,7 +914,7 @@ void WebGLRenderDevice::Lock(vec4 InFlashScale, vec4 InFlashFog, vec4 ScreenClea
 	glClearDepthf(1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	glBindVertexArray(ScenePass.InputLayout->Handle);
+	BindVertexArray(ScenePass.InputLayout->Handle);
 
 	WebGLBuffer* cbs[1] = { ScenePass.ConstantBuffer.get() };
 	SetUniformBuffers(0, 1, cbs);
@@ -1007,13 +1009,16 @@ void WebGLRenderDevice::Unlock(bool Blit)
 
 	if (Blit)
 	{
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, SceneBuffers.Framebuffer->Handle);
-		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SceneBuffers.PPFramebuffer[0]->Handle);
-		glBlitFramebuffer(0, 0, CurrentSizeX, CurrentSizeY, 0, 0, CurrentSizeX, CurrentSizeY, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
+		// The present pass can sample the scene color directly. The extra copy into
+		// the post target is only there so bloom has something to add back onto.
+		WebGLTexture2D* presentColor = SceneBuffers.ColorBuffer.get();
 		if (Bloom)
 		{
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, SceneBuffers.Framebuffer->Handle);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SceneBuffers.PPFramebuffer[0]->Handle);
+			glBlitFramebuffer(0, 0, CurrentSizeX, CurrentSizeY, 0, 0, CurrentSizeX, CurrentSizeY, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 			RunBloomPass();
+			presentColor = SceneBuffers.PPImage[0].get();
 		}
 
 		WebGLPresentPushConstants pushconstants = GetPresentPushConstants();
@@ -1028,14 +1033,14 @@ void WebGLRenderDevice::Unlock(bool Blit)
 		viewport.MaxDepth = 1.0f;
 		SetViewport(viewport);
 
-		glBindVertexArray(PresentPass.PPStepLayout->Handle);
+		BindVertexArray(PresentPass.PPStepLayout->Handle);
 
 		SetBufferData(GL_UNIFORM_BUFFER, GL_STREAM_DRAW, PresentPass.PresentConstantBuffer.get(), &pushconstants, sizeof(WebGLPresentPushConstants));
 
 		SetRasterizerState(PresentPass.RasterizerState.get());
 		WebGLBuffer* cbs[1] = { PresentPass.PresentConstantBuffer.get() };
 		SetUniformBuffers(0, 1, cbs);
-		WebGLTexture2D* psResources[] = { SceneBuffers.PPImage[0].get(), PresentPass.DitherTexture.get() };
+		WebGLTexture2D* psResources[] = { presentColor, PresentPass.DitherTexture.get() };
 		WebGLSampler* psSamplers[] = { PresentPass.LinearSampler.get(), PresentPass.NearestSampler.get() };
 		SetTextures(0, 2, psResources);
 		SetSamplers(0, 2, psSamplers);
@@ -1074,9 +1079,7 @@ void WebGLRenderDevice::Unlock(bool Blit)
 
 	IsLocked = false;
 
-	// GL errors are sticky until read, so polling every few dozen frames still catches
-	// everything that went wrong in between, without a GPU-process round trip per frame.
-	if (ValidateEveryCall || (++FramesSinceErrorCheck & 63) == 0)
+	if (ValidateEveryCall)
 		ThrowIfWebGLError("WebGL error during the last frames");
 }
 
@@ -1506,7 +1509,8 @@ void WebGLRenderDevice::ReadPixels(TextureColor* Pixels)
 {
 	UnmapVertices();
 
-	WebGLFramebuffer* source = SceneBuffers.PPFramebuffer[0].get();
+	WebGLFramebuffer* source = Bloom ? SceneBuffers.PPFramebuffer[0].get() : SceneBuffers.Framebuffer.get();
+	WebGLTexture2D* sourceColor = Bloom ? SceneBuffers.PPImage[0].get() : SceneBuffers.ColorBuffer.get();
 
 	if (GammaCorrectScreenshots)
 	{
@@ -1522,12 +1526,12 @@ void WebGLRenderDevice::ReadPixels(TextureColor* Pixels)
 		viewport.MaxDepth = 1.0f;
 		SetViewport(viewport);
 
-		glBindVertexArray(PresentPass.PPStepLayout->Handle);
+		BindVertexArray(PresentPass.PPStepLayout->Handle);
 
 		SetBufferData(GL_UNIFORM_BUFFER, GL_STREAM_DRAW, PresentPass.PresentConstantBuffer.get(), &pushconstants, sizeof(WebGLPresentPushConstants));
 
 		WebGLBuffer* cbs[1] = { PresentPass.PresentConstantBuffer.get() };
-		WebGLTexture2D* psResources[] = { SceneBuffers.PPImage[0].get(), PresentPass.DitherTexture.get() };
+		WebGLTexture2D* psResources[] = { sourceColor, PresentPass.DitherTexture.get() };
 		WebGLSampler* psSamplers[] = { PresentPass.LinearSampler.get(), PresentPass.NearestSampler.get() };
 		SetRasterizerState(PresentPass.RasterizerState.get());
 		SetUniformBuffers(0, 1, cbs);
@@ -1544,7 +1548,7 @@ void WebGLRenderDevice::ReadPixels(TextureColor* Pixels)
 	int h = CurrentSizeY;
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, source->Handle);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
-	if (HasColorBufferFloat)
+	if (SceneBuffers.ColorIsFloat)
 	{
 		std::vector<float> pixels((size_t)w * h * 4);
 		glReadPixels(0, 0, w, h, GL_RGBA, GL_FLOAT, pixels.data());
@@ -1581,7 +1585,7 @@ void WebGLRenderDevice::ReadPixels(TextureColor* Pixels)
 
 	if (IsLocked)
 	{
-		glBindVertexArray(ScenePass.InputLayout->Handle);
+		BindVertexArray(ScenePass.InputLayout->Handle);
 		SetViewport(SceneViewport);
 		MapVertices(false);
 	}
@@ -1684,6 +1688,25 @@ void WebGLRenderDevice::UseProgram(GLuint program)
 	glUseProgram(program);
 }
 
+void WebGLRenderDevice::BindVertexArray(GLuint vao)
+{
+	if (StateCache.VertexArray == vao)
+		return;
+	StateCache.VertexArray = vao;
+	glBindVertexArray(vao);
+}
+
+void WebGLRenderDevice::BindTexture2D(GLuint handle)
+{
+	if (StateCache.ActiveUnit != 0)
+	{
+		glActiveTexture(GL_TEXTURE0);
+		StateCache.ActiveUnit = 0;
+	}
+	glBindTexture(GL_TEXTURE_2D, handle);
+	StateCache.Textures[0] = handle;
+}
+
 void WebGLRenderDevice::SetBlendState(WebGLBlendState* blendState, const float* blendConstants)
 {
 	if (StateCache.BlendState != blendState)
@@ -1761,7 +1784,6 @@ void WebGLRenderDevice::SetUniformBuffers(int start, int count, WebGLBuffer** bu
 
 void WebGLRenderDevice::SetTextures(int start, int count, WebGLTexture** textures)
 {
-	int activeUnit = 0;
 	for (int i = 0; i < count; i++)
 	{
 		GLuint handle = textures[i] ? textures[i]->Handle : 0;
@@ -1769,14 +1791,14 @@ void WebGLRenderDevice::SetTextures(int start, int count, WebGLTexture** texture
 			continue;
 		StateCache.Textures[start + i] = handle;
 
-		activeUnit = start + i;
-		glActiveTexture(GL_TEXTURE0 + activeUnit);
+		int unit = start + i;
+		if (StateCache.ActiveUnit != unit)
+		{
+			glActiveTexture(GL_TEXTURE0 + unit);
+			StateCache.ActiveUnit = unit;
+		}
 		glBindTexture(GL_TEXTURE_2D, handle);
 	}
-
-	// Leave unit 0 active: texture uploads bind to the active unit
-	if (activeUnit != 0)
-		glActiveTexture(GL_TEXTURE0);
 }
 
 void WebGLRenderDevice::SetSamplers(int start, int count, WebGLSampler** samplers)
@@ -1842,7 +1864,7 @@ void WebGLRenderDevice::DrawBatches(bool nextBuffer)
 
 	if (!QueuedBatches.empty())
 	{
-		glBindVertexArray(ScenePass.InputLayout->Handle);
+		BindVertexArray(ScenePass.InputLayout->Handle);
 		for (const DrawBatchEntry& entry : QueuedBatches)
 			DrawEntry(entry);
 		QueuedBatches.clear();

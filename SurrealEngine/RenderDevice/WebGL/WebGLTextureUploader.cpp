@@ -17,7 +17,7 @@ WebGLTextureUploader* WebGLTextureUploader::GetUploader(TextureFormat format)
 		Uploaders[TextureFormat::R5G6B5].reset(new WebGLTextureUploader_Simple(GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, 2));
 		Uploaders[TextureFormat::RGB8].reset(new WebGLTextureUploader_RGB8());
 		Uploaders[TextureFormat::BGRA8].reset(new WebGLTextureUploader_BGRA8());
-		Uploaders[TextureFormat::RGBA32_F].reset(new WebGLTextureUploader_Simple(GL_RGBA32F, GL_RGBA, GL_FLOAT, 16));
+		Uploaders[TextureFormat::RGBA32_F].reset(new WebGLTextureUploader_RGBA32F());
 	}
 
 	// S3TC is an extension in WebGL (WEBGL_compressed_texture_s3tc); only hand it out when present.
@@ -153,6 +153,38 @@ void WebGLTextureUploader_BGRA8_LM::UploadRect(void* dst, UnrealMipmap* mip, int
 			Ptr++;
 		}
 		src += pitch;
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////
+
+int WebGLTextureUploader_RGBA32F::GetUploadSize(int x, int y, int w, int h)
+{
+	return w * h * 4;
+}
+
+void WebGLTextureUploader_RGBA32F::UploadRect(void* dst, UnrealMipmap* mip, int x, int y, int w, int h, TextureColor* palette, bool masked)
+{
+	(void)palette;
+	(void)masked;
+	int pitch = mip->Width;
+	const float* src = reinterpret_cast<const float*>(mip->Data.data()) + ((size_t)x + (size_t)y * pitch) * 4;
+	auto out = (uint8_t*)dst;
+	for (int row = 0; row < h; row++)
+	{
+		const float* texel = src;
+		for (int col = 0; col < w; col++)
+		{
+			for (int channel = 0; channel < 4; channel++)
+			{
+				float v = texel[channel];
+				if (v < 0.0f) v = 0.0f;
+				if (v > 1.0f) v = 1.0f;
+				*out++ = (uint8_t)(v * 255.0f + 0.5f);
+			}
+			texel += 4;
+		}
+		src += (size_t)pitch * 4;
 	}
 }
 
