@@ -80,14 +80,14 @@ void UWindow::UpdateLayout()
 		if (halign == EHAlign::Left || halign == EHAlign::Full)
 			x = X() + leftMargin;
 		else if (halign == EHAlign::Center)
-			x = (pWidth - width) * 0.5f;
+			x = X() + (pWidth - width) * 0.5f;
 		else if (halign == EHAlign::Right)
 			x = pWidth - rightMargin - width - X();
 
 		if (valign == EVAlign::Top || valign == EVAlign::Full)
 			y = Y() + topMargin;
 		else if (valign == EVAlign::Center)
-			y = (pHeight - height) * 0.5f;
+			y = Y() + (pHeight - height) * 0.5f;
 		else if (valign == EVAlign::Bottom)
 			y = pHeight - bottomMargin - height - Y();
 
@@ -333,6 +333,17 @@ bool UWindow::ConvertVectorToCoordinates(const vec3& Location, float& relativeX,
 
 void UWindow::Destroy()
 {
+	if (auto root = GetRootWindow())
+	{
+		if (root->FocusWindow() == this)
+			root->FocusWindow() = nullptr;
+		if (root->grabbedWindow() == this)
+			root->grabbedWindow() = nullptr;
+		if (root->lastButtonWindow() == this)
+			root->lastButtonWindow() = nullptr;
+		if (root->lastMouseWindow() == this)
+			root->lastMouseWindow() = nullptr;
+	}
 	UWindow* parent = parentOwner();
 	DetachFromParent();
 	if (parent)
@@ -1154,6 +1165,12 @@ void UWindow::ConfigureChild(float newX, float newY, float newWidth, float newHe
 			newY = 0.0f;
 			newHeight = std::max(owner->Height() - topMargin - bottomMargin, 0.0f);
 		}
+
+		// Computer screens seem to be set to center align but then gets configured as if its top left
+		if ((EHAlign)winHAlign() == EHAlign::Center)
+			winHAlign() = (uint8_t)EHAlign::Left;
+		if ((EVAlign)winVAlign() == EVAlign::Center)
+			winVAlign() = (uint8_t)EVAlign::Top;
 	}
 
 	X() = newX;
@@ -1197,6 +1214,7 @@ void UWindow::InitWindow()
 	tileColor() = { 255, 255, 255, 255 };
 	//tilePlane() = vec4(1.0f);
 	backgroundStyle() = (uint8_t)EDrawStyle::Translucent;
+	defaultCursorColor() = { 255, 255, 255, 255 };
 
 	CallEvent(this, "InitWindow");
 }

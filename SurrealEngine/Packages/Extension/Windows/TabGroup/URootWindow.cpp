@@ -6,7 +6,19 @@
 #include "Packages/Engine/Resources/USound.h"
 #include "Packages/Engine/Resources/Textures/UTexture.h"
 #include "Packages/Extension/Windows/UGC.h"
+#include "Packages/Core/Properties/UFloatProperty.h"
+#include "Packages/Core/Properties/UObjectProperty.h"
+#include "Packages/Core/Properties/UStructProperty.h"
 #include "Engine.h"
+#include "VM/ScriptCall.h"
+
+void URootWindow::InitWindow()
+{
+	bIsVisible() = true;
+	bIsSensitive() = true;
+	bCursorVisible() = true;
+	UModalWindow::InitWindow();
+}
 
 void URootWindow::EnablePositionalSound(std::optional<bool> bEnable)
 {
@@ -110,12 +122,11 @@ void URootWindow::WindowReady()
 
 bool URootWindow::IsCursorVisible()
 {
-	// To do: is this correct? There is also URootWindow::ShowCursor - it isn't called by unrealscript when a modal is shown
 	for (UWindow* cur = firstChild(); cur; cur = cur->nextSibling())
 	{
 		if (UObject::TryCast<UModalWindow>(cur))
 		{
-			return true;
+			return bCursorVisible();
 		}
 	}
 	return false;
@@ -127,30 +138,95 @@ void URootWindow::PostDrawWindow(UGC* gc)
 	if (IsCursorVisible())
 	{
 		// Find the cursor based on where the mouse is hovering:
+		float hotX = 0.0f;
+		float hotY = 0.0f;
 		UTexture* cursor = nullptr;
+		UTexture* shadow = nullptr;
+		Color color = { 255, 255, 255, 255 };
 		float relativeX = 0.0f, relativeY = 0.0f;
 		UWindow* focus = GetCursorFocus(relativeX, relativeY);
 		if (!focus)
 			focus = this;
-		while (focus)
+
+		/*
+		// event texture CursorRequested(win, x, y, out hotx, out hoty, out color, out shadowTexture)
+		ExpressionValue result = CallEvent(focus, "CursorRequested", {
+			ExpressionValue::ObjectValue(focus),
+			ExpressionValue::FloatValue(relativeX),
+			ExpressionValue::FloatValue(relativeY),
+			ExpressionValue::Variable(&hotX, engine->floatprop),
+			ExpressionValue::Variable(&hotY, engine->floatprop),
+			ExpressionValue::Variable(&color, engine->colorprop),
+			ExpressionValue::Variable(&shadow, engine->textureprop)
+			});
+		if (result.GetType() != ExpressionValueType::Nothing)
 		{
-			if (UTexture* tex = UObject::Cast<UTexture>(focus->defaultCursor()))
+			cursor = UObject::TryCast<UTexture>(result.ToObject());
+		}
+		*/
+
+		if (!cursor)
+		{
+			while (focus && focus != this)
 			{
-				cursor = tex;
-				break;
+				if (UTexture* tex = focus->GetCursor())
+				{
+					cursor = tex;
+					shadow = focus->GetCursorShadow();
+					color = focus->GetCursorColor();
+					hotX = focus->GetCursorHotX();
+					hotY = focus->GetCursorHotY();
+					break;
+				}
+				focus = focus->parentOwner();
 			}
-			focus = focus->parentOwner();
 		}
 
-		// Draw the cursor if we found one
-		if (cursor)
+		if (!cursor)
+		{
+			// Fall back to the modal window cursor
+			for (UWindow* cur = firstChild(); cur; cur = cur->nextSibling())
+			{
+				if (UObject::TryCast<UModalWindow>(cur))
+				{
+					cursor = cur->GetCursor();
+					shadow = cur->GetCursorShadow();
+					color = cur->GetCursorColor();
+					hotX = cur->GetCursorHotX();
+					hotY = cur->GetCursorHotY();
+					break;
+				}
+			}
+
+			// This UI toolkit sucks! What is the logic behind this!?
+			if (!cursor)
+			{
+				cursor = GetCursor();
+				shadow = GetCursorShadow();
+				color = { 255, 255, 255, 255 };
+				hotX = GetCursorHotX();
+				hotY = GetCursorHotY();
+			}
+		}
+
+		// Draw the cursor and its shadow if we found one
+
+		if (shadow)
 		{
 			Color white = { 255, 255, 255, 255 };
-			gc->SetStyle(EDrawStyle::Masked);
+			gc->SetStyle(EDrawStyle::Modulated);
 			gc->SetTileColor(white);
-			float hotspotX = cursor->USize() * 0.5f;
-			float hotspotY = cursor->VSize() * 0.5f;
-			gc->DrawIcon(MouseX() - hotspotX, MouseY() - hotspotY, cursor);
+			float offsetX = hotX != 0.0f ? hotX : shadow->USize() * 0.5f;
+			float offsetY = hotY != 0.0f ? hotY : shadow->VSize() * 0.5f;
+			gc->DrawIcon(MouseX() - offsetX, MouseY() - offsetY, shadow);
+		}
+		if (cursor)
+		{
+			gc->SetStyle(EDrawStyle::Masked);
+			gc->SetTileColor(color);
+			float offsetX = hotX != 0.0f ? hotX : cursor->USize() * 0.5f;
+			float offsetY = hotY != 0.0f ? hotY : cursor->VSize() * 0.5f;
+			gc->DrawIcon(MouseX() - offsetX, MouseY() - offsetY, cursor);
 		}
 	}
 }
@@ -230,6 +306,8 @@ bool URootWindow::SetRootFocusWindow(UWindow* newFocusWindow)
 
 void URootWindow::SetRootCursorPos(float newMouseX, float newMouseY)
 {
+	UpdateLayout(); // Window dragging needs this as we may have called SetPos
+
 	// Clip cursor to the entire screen, not the root window box:
 
 	newMouseX += UsedX;
@@ -321,6 +399,8 @@ bool URootWindow::OnWindowMouseDown(const Point& pos, EInputKey key)
 	{
 		if (cur->MouseButtonPressed(relativeX, relativeY, key, numClicks))
 			return true;
+		relativeX -= cur->UsedX;
+		relativeY -= cur->UsedY;
 	}
 
 	return IsModalOpen();
@@ -337,6 +417,9 @@ bool URootWindow::OnWindowMouseUp(const Point& pos, EInputKey key)
 	float relativeX = 0.0f, relativeY = 0.0f;
 	UWindow* focus = GetCursorFocus(relativeX, relativeY);
 
+	if (key == IK_LeftMouse) // Unrealscript grabs the mouse on mouse down, but doesn't ungrab it on mouse up!
+		grabbedWindow() = nullptr;
+
 	if (focus->RawMouseButtonPressed(relativeX, relativeY, key, EInputType::IST_Release))
 		return true;
 
@@ -348,6 +431,8 @@ bool URootWindow::OnWindowMouseUp(const Point& pos, EInputKey key)
 	{
 		if (cur->MouseButtonReleased(relativeX, relativeY, key, numClicks))
 			return true;
+		relativeX -= cur->UsedX;
+		relativeY -= cur->UsedY;
 	}
 
 	return IsModalOpen();
@@ -378,8 +463,11 @@ bool URootWindow::OnWindowKeyChar(std::string chars)
 	if (!focus)
 		return IsModalOpen();
 
-	if (focus->KeyPressed(chars))
-		return true;
+	for (UWindow* cur = focus; cur; cur = cur->parentOwner())
+	{
+		if (cur->KeyPressed(chars))
+			return true;
+	}
 
 	// To do: fire these for edit windows
 	// event bool TextChanged(window edit, bool bModified)
@@ -405,11 +493,17 @@ bool URootWindow::OnWindowKeyDown(EInputKey key)
 
 	bool repeat = false; // To do: can surrealwidgets tell us this?
 
-	if (focus->RawKeyPressed(key, EInputType::IST_Press, repeat))
-		return true;
+	for (UWindow* cur = focus; cur; cur = cur->parentOwner())
+	{
+		if (cur->RawKeyPressed(key, EInputType::IST_Press, repeat))
+			return true;
+	}
 
-	if (focus->VirtualKeyPressed(key, repeat))
-		return true;
+	for (UWindow* cur = focus; cur; cur = cur->parentOwner())
+	{
+		if (cur->VirtualKeyPressed(key, repeat))
+			return true;
+	}
 
 	return IsModalOpen();
 }
@@ -420,8 +514,11 @@ bool URootWindow::OnWindowKeyUp(EInputKey key)
 	if (!focus)
 		return IsModalOpen();
 
-	if (focus->RawKeyPressed(key, EInputType::IST_Release, false))
-		return true;
+	for (UWindow* cur = focus; cur; cur = cur->parentOwner())
+	{
+		if (cur->RawKeyPressed(key, EInputType::IST_Release, false))
+			return true;
+	}
 
 	// To do: fire these for specific window types
 	// event bool ButtonActivated(Window button)

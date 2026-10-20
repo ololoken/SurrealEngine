@@ -46,7 +46,7 @@ void UClipWindow::ForceChildSize(std::optional<bool> bNewForceChildWidth, std::o
 		bForceChildHeight() = *bNewForceChildHeight;
 }
 
-UObject* UClipWindow::GetChild()
+UWindow* UClipWindow::GetChild()
 {
 	// Not called by script
 	return firstChild();
@@ -118,4 +118,35 @@ void UClipWindow::SetUnitWidth(int hUnits)
 {
 	// UNUSED from scripts.
 	LogUnimplemented("ClipWindow.SetUnitWidth");
+}
+
+bool UClipWindow::MouseButtonPressed(float pointX, float pointY, EInputKey button, int numClicks)
+{
+	SetFocusWindow(GetChild());
+	return true;
+}
+
+UTexture* UClipWindow::GetCursor()
+{
+	return GetChild()->GetCursor();
+}
+
+Color UClipWindow::GetCursorColor()
+{
+	return GetChild()->GetCursorColor();
+}
+
+UTexture* UClipWindow::GetCursorShadow()
+{
+	return GetChild()->GetCursorShadow();
+}
+
+float UClipWindow::GetCursorHotX()
+{
+	return GetChild()->GetCursorHotX();
+}
+
+float UClipWindow::GetCursorHotY()
+{
+	return GetChild()->GetCursorHotY();
 }
