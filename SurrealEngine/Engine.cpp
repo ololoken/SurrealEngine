@@ -63,6 +63,7 @@
 #include <set>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/html5.h>
 #endif
 
 Engine* engine = nullptr;
@@ -1599,12 +1600,35 @@ void Engine::OpenWindow()
 
 	window->SetWindowTitle(LaunchInfo.gameName + versionString + " - Surreal Engine");
 	window->SetFrameGeometry(Rect::xywh(0.0, 0.0, width, height));
-	viewport->SetViewportRect(0, 0, width, height);
 
 	if (fullscreen)
 		window->ShowFullscreen();
 	else
 		window->ShowNormal();
+
+#ifdef __EMSCRIPTEN__
+	// Browser resize runs SDL's Emscripten_HandleResize, which reads the canvas
+	// CSS size and sets the drawing buffer to it. The ini size above (often
+	// 640x480) overwrites the CSS size SDL already measured at window creation.
+	// Apply that same CSS size now so the first frame matches a resize.
+	{
+		double cssW = 0;
+		double cssH = 0;
+		if (emscripten_get_element_css_size("#canvas", &cssW, &cssH) == EMSCRIPTEN_RESULT_SUCCESS)
+		{
+			int cssWidth = (int)cssW;
+			int cssHeight = (int)cssH;
+			if (cssWidth > 0 && cssHeight > 0 && (cssWidth != width || cssHeight != height))
+			{
+				width = cssWidth;
+				height = cssHeight;
+				window->SetFrameGeometry(Rect::xywh(0.0, 0.0, width, height));
+			}
+		}
+	}
+#endif
+
+	viewport->SetViewportRect(0, 0, width, height);
 }
 
 void Engine::CloseWindow()
