@@ -209,6 +209,20 @@ public:
 	FILE* handle = nullptr;
 };
 
+#ifdef __EMSCRIPTEN__
+EM_ASYNC_JS(int, surreal_ensure_remote_file, (const char* path), {
+	if (typeof Module.ensureRemoteFile !== 'function')
+		return 0;
+	try {
+		const code = await Module.ensureRemoteFile(UTF8ToString(path));
+		return code | 0;
+	} catch (error) {
+		console.error(error);
+		return -1;
+	}
+});
+#endif
+
 std::shared_ptr<File> File::create_always(const std::string &filename)
 {
 	FILE* handle = fopen(filename.c_str(), "wb");
@@ -220,6 +234,10 @@ std::shared_ptr<File> File::create_always(const std::string &filename)
 
 std::shared_ptr<File> File::open_existing(const std::string &filename)
 {
+#ifdef __EMSCRIPTEN__
+	if (surreal_ensure_remote_file(filename.c_str()) < 0)
+		Exception::Throw("Could not open " + filename);
+#endif
 	FILE* handle = fopen(filename.c_str(), "rb");
 	if (handle == nullptr)
 		Exception::Throw("Could not open " + filename);
