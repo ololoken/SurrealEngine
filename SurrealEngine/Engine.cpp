@@ -320,6 +320,7 @@ void Engine::Run()
 			if (EntryLevel && Level != EntryLevel)
 			{
 				LogMessage("Client travel to entry");
+				audiodev->StopSounds();
 				UnloadMap();
 				LevelPackage = EntryLevelPackage;
 				Level = EntryLevel;
@@ -499,7 +500,7 @@ UnrealMipmap* Engine::PlayVideo(VideoPlayer* video, UnrealMipmap* background)
 	}
 
 	audiodev->SetViewport(nullptr);
-	audiodev->GetDevice()->PlayMusic(video->GetAudio());
+	audiodev->PlayMusic(video->GetAudio());
 
 	float timestamp = 0.0f;
 	int curframe = -1;
@@ -532,7 +533,7 @@ UnrealMipmap* Engine::PlayVideo(VideoPlayer* video, UnrealMipmap* background)
 		if (done)
 			break;
 
-		audiodev->GetDevice()->Update();
+		audiodev->Update();
 		GameWindow::ProcessEvents();
 
 		if (frame)
@@ -546,7 +547,7 @@ UnrealMipmap* Engine::PlayVideo(VideoPlayer* video, UnrealMipmap* background)
 		}
 	}
 
-	audiodev->GetDevice()->PlayMusic(nullptr);
+	audiodev->StopMusic();
 
 	if (quit || skipAvi)
 		return nullptr;
@@ -573,11 +574,8 @@ UConversationList* Engine::GetDeusExMission()
 
 void Engine::UpdateAudio()
 {
-	mat4 translate = mat4::translate(vec3(0.0f) - CameraLocation);
-	mat4 listener = Coords::ViewToAudioDev().ToMatrix() * Coords::Rotation(CameraRotation).ToMatrix() * translate;
-
 	audiodev->SetViewport(viewport);
-	audiodev->Update(listener);
+	audiodev->Update();
 }
 
 void Engine::ClientTravel(const std::string& newURL, ETravelType travelType, bool transferItems)
@@ -1148,10 +1146,13 @@ std::string Engine::ConsoleCommand(UObject* context, const std::string& commandl
 	}
 	else if (command == "stat" && args.size() == 2)
 	{
-		render->ShowRenderStats = 0;
+		render->ShowRenderStats = false;
+		render->ShowAudioStats = false;
 
 		if (args[1] == "render")
-			render->ShowRenderStats = 1;
+			render->ShowRenderStats = true;
+		else if (args[1] == "audio")
+			render->ShowAudioStats = true;
 	}
 	else if (command == "collisiondebug" && args.size() == 2)
 	{

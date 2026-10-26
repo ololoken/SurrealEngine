@@ -21,6 +21,7 @@ FrameRunState Frame::RunState = FrameRunState::Running;
 Frame* Frame::StepFrame = nullptr;
 Expression* Frame::StepExpression = nullptr;
 std::string Frame::ExceptionText;
+bool Frame::BreakOnError;
 std::unique_ptr<Iterator> Frame::CreatedIterator;
 
 Frame::Frame(UObject* instance, UStruct* func, size_t statementIndex, bool isStateFrame) :
@@ -280,12 +281,24 @@ std::string Frame::GetCallstack()
 		std::string name = frame->GetName();
 		if (UStruct* func = frame->Func)
 		{
-			name += " line " + std::to_string(func->Line);
-
 			if (frame->StatementIndex > 0) // StatementIndex points at the NEXT statement to be executed
 			{
+				int line = func->GetStatementLine(func->Code->Statements[frame->StatementIndex - 1]);
+				if (line > 0)
+				{
+					name += " line " + std::to_string(line);
+				}
+				else
+				{
+					name += " line " + std::to_string(func->Line) + " [debug info failed]";
+					line = func->GetStatementLine(func->Code->Statements[frame->StatementIndex - 1]);
+				}
 				name += ": ";
 				name += GetDisassembly(func->Code->Statements[frame->StatementIndex - 1]);
+			}
+			else
+			{
+				name += " line " + std::to_string(func->Line);
 			}
 		}
 		if (!result.empty()) result += newline;
@@ -623,7 +636,14 @@ ExpressionEvalResult Frame::Run()
 			break;
 		case StatementResult::AccessedNone:
 			LogMessage("Accessed None");
-			LogMessage(Frame::GetCallstack());
+			if (BreakOnError)
+			{
+				Break();
+			}
+			else
+			{
+				LogMessage(Frame::GetCallstack());
+			}
 			break;
 		}
 
@@ -711,8 +731,6 @@ ExpressionEvalResult Frame::RunExpr(Expression* statementExpr, UObject* self, UO
 
 	try
 	{
-		auto oldExpr = Frame::StepExpression;
-
 		ExpressionEvalResult result;
 
 		PushExpr(statementExpr);
@@ -721,7 +739,16 @@ ExpressionEvalResult Frame::RunExpr(Expression* statementExpr, UObject* self, UO
 		{
 			Expression* expr = vmstack.expr[vmstack.exprEnd - 1];
 			int pass = vmstack.pass[vmstack.exprEnd - 1]++;
+
 			Frame::StepExpression = expr;
+			for (const Breakpoint& bp : Breakpoints)
+			{
+				if (bp.Expr == expr && bp.Enabled)
+				{
+					Frame::Break();
+				}
+			}
+
 			switch (expr->Type)
 			{
 			default:
@@ -2014,7 +2041,6 @@ ExpressionEvalResult Frame::RunExpr(Expression* statementExpr, UObject* self, UO
 			}
 		}
 
-		Frame::StepExpression = oldExpr;
 		if (vmstack.valueEnd > enterValueEnd)
 			result.Value = std::move(PopValue());
 
